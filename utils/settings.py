@@ -5,7 +5,6 @@ import numpy as np
 class Settings:
     # CAM PARAMS
     fs: int = 40
-    dt: float = field(init=False)  # Mark `dt` as excluded from the constructor
     width: int = 1280 # image resolution
     height: int = 720 # image resolution
 
@@ -19,8 +18,5 @@ class Settings:
         default_factory=lambda: np.array([[0.000], [0.271], [0.000]]) # local pose of wand's end effector for pointing calibration
     )
     wand_marker_size: float = 0.176 # Marker size in meters (17.6 cm)
-    
-    def __post_init__(self):
-        self.dt = 1 / self.fs  # Compute `dt` after initialization
 
 

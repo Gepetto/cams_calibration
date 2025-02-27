@@ -1,35 +1,21 @@
+# To launch the script python3 -m cams_calibration.check_pinpointed_frames
 # This script helps to verify in the camera frame the different frames of the setup : human, robot, world 
-# To launch the script python3 -m cams_calibration.check_pinpointed_frames test test
+
+import os
+# Get the absolute path to the current file (script_to_launch.py)
+script_path = os.path.abspath(__file__)
+# Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
+repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from utils.settings import Settings
+# FIRST, PARAM LOADING
+settings = Settings()
 
 import cv2
 import numpy as np
-from utils.calib_utils import load_cam_params, load_cam_pose_rpy, load_cam_pose, get_aruco_pose, get_relative_pose_robot_in_cam, save_pose_rpy_to_yaml, list_cameras_with_v4l2
-import sys
-import os
+from utils.calib_utils import load_cam_params, load_cam_pose_rpy, load_cam_pose, list_cameras_with_v4l2
 from scipy.spatial.transform import Rotation
 from utils.settings import Settings
-
-# Get the directory where the script is located
-script_directory = os.path.dirname(os.path.abspath(__file__))
-# Go one folder back
-parent_directory = os.path.dirname(script_directory)
-
-# Checking if at least two arguments are passed (including the script name)
-if len(sys.argv) > 2:
-    arg1 = sys.argv[1]  # First argument
-    arg2 = sys.argv[2]  # Second argument
-
-    # You can now use arg1 and arg2 in your script
-    # Remember to convert them from strings if they represent other types
-else:
-    print("Not enough arguments provided. Usage: mycode.py <arg1> <arg2>")
-    sys.exit(1)  # Exit the script
-
-expe_no = str(arg1)
-trial_no = str(arg2)
-
-# FIRST, PARAM LOADING
-settings = Settings()
 
 ### Initialize cams stream
 camera_dict = list_cameras_with_v4l2()
@@ -45,20 +31,20 @@ for idx, cap in enumerate(captures):
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.height)
     cap.set(cv2.CAP_PROP_FPS, settings.fs)
 
-K1, D1 = load_cam_params(os.path.join(parent_directory,"config/cam_params/c1_params_color_"+ expe_no + "_" + trial_no +".yaml"))
-K2, D2 = load_cam_params(os.path.join(parent_directory,"config/cam_params/c2_params_color_"+ expe_no + "_" + trial_no +".yaml"))
+K1, D1 = load_cam_params(os.path.join(repo_path,"config","cam_params","c1_params_color.yaml"))
+K2, D2 = load_cam_params(os.path.join(repo_path,"config","cam_params","c2_params_color.yaml"))
 
-cam_R1_world, cam_T1_world = load_cam_pose(os.path.join(parent_directory,"config/cam_params/camera1_pose_"+ expe_no + "_" + trial_no +".yaml"))
-cam_R2_world, cam_T2_world = load_cam_pose(os.path.join(parent_directory,"config/cam_params/camera2_pose_"+ expe_no + "_" + trial_no +".yaml"))
+cam_R1_world, cam_T1_world = load_cam_pose(os.path.join(repo_path,"config","cam_params","camera1_pose.yaml"))
+cam_R2_world, cam_T2_world = load_cam_pose(os.path.join(repo_path,"config","cam_params","camera2_pose.yaml"))
 
-world_rpy1_human, world_T1_human = load_cam_pose_rpy(os.path.join(parent_directory,"config/human_params/c1_human_color_"+ expe_no + "_" + trial_no +".yaml"))
+world_rpy1_human, world_T1_human = load_cam_pose_rpy(os.path.join(repo_path,"config","human_params","c1_human_color.yaml"))
 world_R1_human = Rotation.from_euler('xyz', world_rpy1_human.T, degrees=False).as_matrix()[0]
-world_rpy2_human, world_T2_human = load_cam_pose_rpy(os.path.join(parent_directory,"config/human_params/c2_human_color_"+ expe_no + "_" + trial_no +".yaml"))
+world_rpy2_human, world_T2_human = load_cam_pose_rpy(os.path.join(repo_path,"config","human_params","c2_human_color.yaml"))
 world_R2_human = Rotation.from_euler('xyz', world_rpy2_human.T, degrees=False).as_matrix()[0]
 
-world_rpy1_robot, world_T1_robot = load_cam_pose_rpy(os.path.join(parent_directory,"config/robot_params/c1_robot_color_"+ expe_no + "_" + trial_no +".yaml"))
+world_rpy1_robot, world_T1_robot = load_cam_pose_rpy(os.path.join(repo_path,"config","robot_params","c1_robot_color.yaml"))
 world_R1_robot = Rotation.from_euler('xyz', world_rpy1_robot.T, degrees=False).as_matrix()[0]
-world_rpy2_robot, world_T2_robot = load_cam_pose_rpy(os.path.join(parent_directory,"config/robot_params/c2_robot_color_"+ expe_no + "_" + trial_no +".yaml"))
+world_rpy2_robot, world_T2_robot = load_cam_pose_rpy(os.path.join(repo_path,"config","robot_params","c2_robot_color.yaml"))
 world_R2_robot = Rotation.from_euler('xyz', world_rpy2_robot.T, degrees=False).as_matrix()[0]
 
 cam_T1_human = cam_T1_world + cam_R1_world@world_T1_human

@@ -1,4 +1,4 @@
-# To run the code from RT-COSMIK root : python3 -m cams_calibration.get_robot_base_frame test test
+# To run the code from RT-COSMIK root : python3 -m cams_calibration.get_robot_base_frame
 
 # For the pinpointing when facing the robot by the long side (behind the x axis): 
 # - First image should be the top left screw at the base of the panda
@@ -8,46 +8,30 @@
 
 # At NUS for third and fourth images, screws on the box mount can be used
 
+import os
+# Get the absolute path to the current file (script_to_launch.py)
+script_path = os.path.abspath(__file__)
+# Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
+repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from utils.settings import Settings
+# FIRST, PARAM LOADING
+settings = Settings()
+
 import cv2
 import numpy as np
 from utils.calib_utils import load_cam_params, load_cam_pose, get_aruco_pose, get_relative_pose_robot_in_cam, save_pose_rpy_to_yaml, list_cameras_with_v4l2
-import sys
-import os
 from scipy.spatial.transform import Rotation
-from utils.settings import Settings
-
-# Get the directory where the script is located
-script_directory = os.path.dirname(os.path.abspath(__file__))
-# Go one folder back
-parent_directory = os.path.dirname(script_directory)
-
-# Checking if at least two arguments are passed (including the script name)
-if len(sys.argv) > 2:
-    arg1 = sys.argv[1]  # First argument
-    arg2 = sys.argv[2]  # Second argument
-
-    # You can now use arg1 and arg2 in your script
-    # Remember to convert them from strings if they represent other types
-else:
-    print("Not enough arguments provided. Usage: mycode.py <arg1> <arg2>")
-    sys.exit(1)  # Exit the script
-
-expe_no = str(arg1)
-trial_no = str(arg2)
 
 # Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
-os.makedirs(os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_1/" + expe_no + "_" + trial_no + "/color"), exist_ok=True)
-os.makedirs(os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_2/" + expe_no + "_" + trial_no + "/color"), exist_ok=True)
-os.makedirs(os.path.join(parent_directory,"config/robot_params"), exist_ok=True)
+os.makedirs(os.path.join(repo_path,"images_robot_base_cam_1","color"), exist_ok=True)
+os.makedirs(os.path.join(repo_path,"images_robot_base_cam_2","color"), exist_ok=True)
+os.makedirs(os.path.join(repo_path,"config","robot_params"), exist_ok=True)
 
-c1_color_imgs_path = os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_1/" + expe_no + "_" + trial_no + "/color/*")
-c2_color_imgs_path = os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_2/" + expe_no + "_" + trial_no + "/color/*")
-
-c1_color_params_path = os.path.join(parent_directory,"config/robot_params/c1_robot_color_" + expe_no + "_" + trial_no + ".yaml")
-c2_color_params_path = os.path.join(parent_directory,"config/robot_params/c2_robot_color_" + expe_no + "_" + trial_no + ".yaml")
-
-# FIRST, PARAM LOADING
-settings = Settings()
+c1_color_imgs_dir = os.path.join(repo_path, "images_robot_base_cam_1", "color")
+c2_color_imgs_dir = os.path.join(repo_path, "images_robot_base_cam_2", "color")
+c1_color_params_path = os.path.join(repo_path,"config","robot_params","c1_robot_color.yaml")
+c2_color_params_path = os.path.join(repo_path,"config","robot_params","c2_robot_color.yaml")
 
 ### Initialize cams stream
 camera_dict = list_cameras_with_v4l2()
@@ -67,11 +51,11 @@ for idx, cap in enumerate(captures):
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 marker_size = settings.wand_marker_size  # Marker size in meters (17.6 cm)
 
-K1, D1 = load_cam_params(os.path.join(parent_directory,"config/cam_params/c1_params_color_"+ expe_no + "_" + trial_no +".yaml"))
-K2, D2 = load_cam_params(os.path.join(parent_directory,"config/cam_params/c2_params_color_"+ expe_no + "_" + trial_no +".yaml"))
+K1, D1 = load_cam_params(os.path.join(repo_path,"config","cam_params","c1_params_color.yaml"))
+K2, D2 = load_cam_params(os.path.join(repo_path,"config","cam_params","c2_params_color.yaml"))
 
-cam_R1_world, cam_T1_world = load_cam_pose(os.path.join(parent_directory,"config/cam_params/camera1_pose_"+ expe_no + "_" + trial_no +".yaml"))
-cam_R2_world, cam_T2_world = load_cam_pose(os.path.join(parent_directory,"config/cam_params/camera2_pose_"+ expe_no + "_" + trial_no +".yaml"))
+cam_R1_world, cam_T1_world = load_cam_pose(os.path.join(repo_path,"config","cam_params","camera1_pose.yaml"))
+cam_R2_world, cam_T2_world = load_cam_pose(os.path.join(repo_path,"config","cam_params","camera2_pose.yaml"))
 
 # Inverse the pose to get cam in world frame 
 world_R1_cam = cam_R1_world.T
@@ -155,10 +139,13 @@ try :
         
         c = cv2.waitKey(10)
         if c == ord('s'):
-            print('images taken')
-            cv2.imwrite(os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_1/" + expe_no + "_" + trial_no + "/color/img_" + str(img_idx) + ".png"), color_frame_1)
-            cv2.imwrite(os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_2/" + expe_no + "_" + trial_no + "/color/img_" + str(img_idx) + ".png"), color_frame_2)
-            img_idx = img_idx + 1
+            print("Images taken")
+            # Build the full file paths for the images
+            img1_path = os.path.join(c1_color_imgs_dir, "img_" + str(img_idx) + ".png")
+            img2_path = os.path.join(c2_color_imgs_dir, "img_" + str(img_idx) + ".png")
+            cv2.imwrite(img1_path, color_frame_1)
+            cv2.imwrite(img2_path, color_frame_2)
+            img_idx += 1
         if c == ord('q'):
             print("quit")
             break
@@ -169,7 +156,7 @@ finally :
     cv2.destroyAllWindows()
 
 
-cam_T1_robot, cam_R1_robot = get_relative_pose_robot_in_cam(c1_color_imgs_path,K1,D1,detector, marker_size)
+cam_T1_robot, cam_R1_robot = get_relative_pose_robot_in_cam(os.path.join(c1_color_imgs_dir, "*.png"),K1,D1,detector, marker_size)
 
 world_T1_robot = world_R1_cam@cam_T1_robot + world_T1_cam
 world_R1_robot = world_R1_cam@cam_R1_robot 
@@ -183,7 +170,7 @@ print(world_rpy1_robot)
 
 save_pose_rpy_to_yaml(world_T1_robot, world_rpy1_robot, c1_color_params_path)
 
-cam_T2_robot, cam_R2_robot = get_relative_pose_robot_in_cam(c2_color_imgs_path,K2,D2,detector, marker_size)
+cam_T2_robot, cam_R2_robot = get_relative_pose_robot_in_cam(os.path.join(c2_color_imgs_dir, "*.png"),K2,D2,detector, marker_size)
 
 world_T2_robot = world_R2_cam@cam_T2_robot + world_T2_cam
 world_R2_robot = world_R2_cam@cam_R2_robot 
@@ -202,13 +189,13 @@ camera_data = [
     {   "K": K1, "D": D1,
         "cam_T_world": cam_T1_world, "cam_R_world": cam_R1_world,
         "cam_T_robot": cam_T1_robot, "cam_R_robot": cam_R1_robot,
-        "image": cv2.imread(os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_1/" + expe_no + "_" + trial_no + "/color/img_0.png"))
+        "image": cv2.imread(os.path.join(c1_color_imgs_dir,"img_0.png"))
     },
     {
         "K": K2, "D": D2,
         "cam_T_world": cam_T2_world, "cam_R_world": cam_R2_world,
         "cam_T_robot": cam_T2_robot, "cam_R_robot": cam_R2_robot,
-        "image": cv2.imread(os.path.join(parent_directory,"cams_calibration/images_robot_base_cam_2/" + expe_no + "_" + trial_no + "/color/img_0.png"))
+        "image": cv2.imread(os.path.join(c2_color_imgs_dir,"img_0.png"))
     }
 ]
 

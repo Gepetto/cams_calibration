@@ -1,38 +1,23 @@
-# To run the code from RT-COSMIK root : python3 -m cams_calibration.display_wand_rviz test test
+# To run the code from repo root : python3 -m cams_calibration.display_wand_rviz
+
+import os
+# Get the absolute path to the current file (script_to_launch.py)
+script_path = os.path.abspath(__file__)
+# Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
+repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from utils.settings import Settings
+# FIRST, PARAM LOADING
+settings = Settings()
 
 import cv2
 import numpy as np
-from utils.calib_utils import load_cam_pose, load_cam_params, save_pose_matrix_to_yaml, get_aruco_pose, get_relative_pose_world_in_cam, list_cameras_with_v4l2
-import sys
-import os 
-from utils.settings import Settings
+from utils.calib_utils import load_cam_pose, load_cam_params, get_aruco_pose, list_cameras_with_v4l2
 import rospy
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import PoseStamped, TransformStamped
 import tf2_ros
 from scipy.spatial.transform import Rotation
-
-# Get the directory where the script is located
-script_directory = os.path.dirname(os.path.abspath(__file__))
-# Go one folder back
-parent_directory = os.path.dirname(script_directory)
-
-# Checking if at least two arguments are passed (including the script name)
-if len(sys.argv) > 2:
-    arg1 = sys.argv[1]  # First argument
-    arg2 = sys.argv[2]  # Second argument
-
-    # You can now use arg1 and arg2 in your script
-    # Remember to convert them from strings if they represent other types
-else:
-    print("Not enough arguments provided. Usage: mycode.py <arg1> <arg2>")
-    sys.exit(1)  # Exit the script
-
-expe_no = str(arg1)
-trial_no = str(arg2)
-
-# FIRST, PARAM LOADING
-settings = Settings()
 
 ### Initialize cams stream
 camera_dict = list_cameras_with_v4l2()
@@ -53,11 +38,11 @@ for idx, cap in enumerate(captures):
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 marker_size = settings.wand_marker_size  # Marker size in meters (17.6 cm)
 
-K1, D1 = load_cam_params(os.path.join(parent_directory,"config/cam_params/c1_params_color_"+ expe_no + "_" + trial_no +".yaml"))
-K2, D2 = load_cam_params(os.path.join(parent_directory,"config/cam_params/c2_params_color_"+ expe_no + "_" + trial_no +".yaml"))
+K1, D1 = load_cam_params(os.path.join(repo_path,"config","cam_params","c1_params_color.yaml"))
+K2, D2 = load_cam_params(os.path.join(repo_path,"config","cam_params","c2_params_color.yaml"))
 
-cam_R1_world, cam_T1_world = load_cam_pose(os.path.join(parent_directory,"config/cam_params/camera1_pose_"+ expe_no + "_" + trial_no +".yaml"))
-cam_R2_world, cam_T2_world = load_cam_pose(os.path.join(parent_directory,"config/cam_params/camera2_pose_"+ expe_no + "_" + trial_no +".yaml"))
+cam_R1_world, cam_T1_world = load_cam_pose(os.path.join(repo_path,"config","cam_params","camera1_pose.yaml"))
+cam_R2_world, cam_T2_world = load_cam_pose(os.path.join(repo_path,"config","cam_params","camera2_pose.yaml"))
 
 # Inverse the pose to get cam in world frame 
 world_R1_cam = cam_R1_world.T
