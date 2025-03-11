@@ -1,10 +1,13 @@
-# To run the code from repo root : python -m cams_calibration.calibrate_cameras
+# To run the code from repo root : python3 scripts/rgb/calibrate_cameras.py
 
 import os
 # Get the absolute path to the current file (script_to_launch.py)
 script_path = os.path.abspath(__file__)
 # Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
 repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
 
 from utils.settings import Settings
 # FIRST, PARAM LOADING
