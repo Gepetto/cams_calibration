@@ -15,7 +15,7 @@ from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params
 # Load settings
 settings = Settings()
 
-nbr_cam = 4  # Set number of cameras
+nbr_cam = 3  # Set number of cameras
 
 ## Initialize camera streams
 camera_dict = list_cameras_with_v4l2()
@@ -64,8 +64,8 @@ try:
         resized_frames = [cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST) for frame in frames]
 
         # Stack images for visualization (2x2 grid)
-        images_hstack_1 = np.hstack((resized_frames[0], resized_frames[1]))
-        images_hstack_2 = np.hstack((resized_frames[2], resized_frames[3]))
+        images_hstack_1 = np.hstack((resized_frames[0], resized_frames[2]))
+        images_hstack_2 = np.hstack((resized_frames[2], resized_frames[1]))
         images_vstack = np.vstack((images_hstack_1, images_hstack_2))
 
         # Display images
@@ -102,6 +102,11 @@ cv2.destroyAllWindows()
 # Stereo calibration for all camera pairs
 extrinsics = {}
 for (i, j), path in stereo_params_paths.items():
+    if (i, j) == (0, 1): #i know that 0 and 1 will never see the checkoard together
+        print(f"Skipping stereo calibration for cameras {i} and {j} (Checkerboard never visible together)")
+        continue
+    print(i)
+    print(j)
     mtx_1, dist_1 = load_cam_params(calib_params_paths[i])
     mtx_2, dist_2 = load_cam_params(calib_params_paths[j])
 

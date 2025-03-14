@@ -182,13 +182,16 @@ def stereo_calibrate(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2)
  
     #coordinates of the checkerboard in checkerboard world space.
     objpoints = [] # 3d point in real world space
+    valid_frame_count = 0
  
     for frame1, frame2 in zip(c1_images, c2_images):
         gray1 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
         gray2 = cv.cvtColor(frame2, cv.COLOR_BGR2GRAY)
+
         c_ret1, corners1 = cv.findChessboardCorners(gray1, (rows, columns), None)
         c_ret2, corners2 = cv.findChessboardCorners(gray2, (rows, columns), None)
- 
+
+
         if c_ret1 == True and c_ret2 == True:
             corners1 = cv.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), criteria)
             corners2 = cv.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), criteria)
@@ -205,6 +208,8 @@ def stereo_calibrate(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2)
                 objpoints.append(objp)
                 imgpoints_left.append(corners1)
                 imgpoints_right.append(corners2)
+    
+        print(f"Stereo calibration with {valid_frame_count} valid image pairs.")
 
     stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
     ret, CM1, dist1, CM2, dist2, R, T, E, F = cv.stereoCalibrate(objpoints, imgpoints_left, imgpoints_right, mtx1, dist1,
