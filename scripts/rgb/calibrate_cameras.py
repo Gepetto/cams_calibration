@@ -17,6 +17,7 @@ import numpy as np
 import cv2
 from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params, list_cameras_with_v4l2
 
+config_path= "/root/workspace/ros_ws/src/rt-cosmik/config"
 ## Initialize cams stream
 camera_dict = list_cameras_with_v4l2()
 captures = [cv2.VideoCapture(idx, cv2.CAP_V4L2) for idx in camera_dict.keys()]
@@ -31,17 +32,16 @@ for idx, cap in enumerate(captures):
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.height)
     cap.set(cv2.CAP_PROP_FPS, settings.fs)
 
-
 # Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
-os.makedirs(os.path.join(repo_path,"images_calib_cam_1","color"), exist_ok=True)
-os.makedirs(os.path.join(repo_path,"images_calib_cam_2","color"), exist_ok=True)
+os.makedirs(os.path.join(config_path,"images_calib_cam_1","color"), exist_ok=True)
+os.makedirs(os.path.join(config_path,"images_calib_cam_2","color"), exist_ok=True)
 
 # Define paths 
-c1_color_imgs_dir = os.path.join(repo_path, "images_calib_cam_1", "color")
-c2_color_imgs_dir = os.path.join(repo_path, "images_calib_cam_2", "color")
-c1_color_params_path = os.path.join(repo_path, "config","cam_params","c1_params_color.yaml")
-c2_color_params_path = os.path.join(repo_path, "config","cam_params","c2_params_color.yaml")
-c1_to_c2_color_params_path = os.path.join(repo_path, "config","cam_params","c1_to_c2_params_color.yaml")
+c1_color_imgs_dir = os.path.join(config_path, "images_calib_cam_1", "color")
+c2_color_imgs_dir = os.path.join(config_path, "images_calib_cam_2", "color")
+c1_color_params_path = os.path.join(config_path,"cam_params","c1_params_color.yaml")
+c2_color_params_path = os.path.join(config_path,"cam_params","c2_params_color.yaml")
+c1_to_c2_color_params_path = os.path.join(config_path,"cam_params","c1_to_c2_params_color.yaml")
 
 img_idx = 0
 try:
