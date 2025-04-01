@@ -1,3 +1,11 @@
+import os
+# Get the absolute path to the current file (script_to_launch.py)
+script_path = os.path.abspath(__file__)
+# Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
+repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -71,6 +79,8 @@ try:
         ir_frame_1 = frames.get_infrared_frame(1)
         ir_frame_2 = frames.get_infrared_frame(2)
 
+        # print(ir_frame_1.get_profile().format())
+        
         if not ir_frame_1 or not ir_frame_2:
             continue
 
@@ -109,7 +119,6 @@ finally:
     # Stop streaming
     pipeline.stop()
     cv2.destroyAllWindows()
-
 
 reproj1_ir, mtx1_ir, dist1_ir = calibrate_camera(images_folder = c1_ir_imgs_path)
 save_cam_params(mtx1_ir, dist1_ir, reproj1_ir, c1_ir_params_path)

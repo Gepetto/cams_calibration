@@ -79,7 +79,7 @@ def calibrate_camera(images_folder):
             corners = cv.cornerSubPix(gray, corners, conv_size, (-1, -1), criteria)
             cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
             cv.imshow('img', frame)
-            k = cv.waitKey(50)
+            k = cv.waitKey(0)
  
             objpoints.append(objp)
             imgpoints.append(corners)
@@ -93,6 +93,97 @@ def calibrate_camera(images_folder):
     # print('Ts:\n', tvecs)
  
     return ret, mtx, dist
+
+def calibrate_camera_runtime(images):
+    objpoints = []
+    imgpoints = []
+    criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    rows, columns, world_scaling = settings.checkerboard_rows, settings.checkerboard_columns, settings.checkerboard_scaling
+    objp = np.zeros((rows * columns, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:rows, 0:columns].T.reshape(-1, 2) * world_scaling
+    
+    width, height = images[0].shape[1], images[0].shape[0]
+    
+    for frame in images:
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
+        if ret:
+            corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+            objpoints.append(objp)
+            imgpoints.append(corners)
+    
+    ret, mtx, dist, _, _ = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
+    return ret, mtx, dist
+
+
+def calibrate_camera_multichessboard(images_folder, checkerboard_configs):
+    """
+    Calibrates the camera using images of multiple checkerboard patterns.
+    
+    Args:
+        images_folder (str): Path to the folder containing checkerboard images.
+        checkerboard_configs (list of dict): List containing chessboard configurations, each with:
+            - 'rows': Number of checkerboard rows.
+            - 'columns': Number of checkerboard columns.
+            - 'square_size': Size of each square in meters or mm.
+
+    Returns:
+        tuple: (RMS error, camera matrix, distortion coefficients).
+    """
+
+    # Load images
+    images_names = sorted(glob.glob(images_folder))
+    images = [cv.imread(imname, 1) for imname in images_names if imname is not None]
+
+    # Termination criteria for corner subpixel refinement
+    criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+
+    # Storage for object points and image points
+    objpoints = []  # 3D real-world points
+    imgpoints = []  # 2D image points
+
+    for frame in images:
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        
+        found = False  # Track if a valid chessboard was found
+
+        for config in checkerboard_configs:
+            rows, columns = config['rows'], config['columns']
+            square_size = config['square_size']
+
+            # Define object points for this chessboard size
+            objp = np.zeros((rows * columns, 3), np.float32)
+            objp[:, :2] = np.mgrid[0:rows, 0:columns].T.reshape(-1, 2) * square_size
+
+            # Try detecting this chessboard
+            ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
+
+            if ret:
+                # Refine corner positions
+                corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+
+                # Draw the detected chessboard (for debugging)
+                cv.drawChessboardCorners(frame, (rows, columns), corners, ret)
+                cv.imshow('Detected Chessboard', frame)
+                cv.waitKey(50)
+
+                objpoints.append(objp)
+                imgpoints.append(corners)
+                found = True
+                break  # Stop once we find a valid chessboard in this image
+
+        if not found:
+            print(f"Warning: No chessboard found in image {frame.shape}")
+
+    # Perform calibration
+    width, height = images[0].shape[1], images[0].shape[0]
+    ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
+
+    cv.destroyAllWindows()
+
+    print(f"Calibration completed with RMS error: {ret}")
+    return ret, mtx, dist
+
 
 def is_order_consistent(corners1, corners2):
     """
@@ -182,16 +273,13 @@ def stereo_calibrate(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2)
  
     #coordinates of the checkerboard in checkerboard world space.
     objpoints = [] # 3d point in real world space
-    valid_frame_count = 0
  
     for frame1, frame2 in zip(c1_images, c2_images):
         gray1 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
         gray2 = cv.cvtColor(frame2, cv.COLOR_BGR2GRAY)
-
         c_ret1, corners1 = cv.findChessboardCorners(gray1, (rows, columns), None)
         c_ret2, corners2 = cv.findChessboardCorners(gray2, (rows, columns), None)
-
-
+ 
         if c_ret1 == True and c_ret2 == True:
             corners1 = cv.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), criteria)
             corners2 = cv.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), criteria)
@@ -203,13 +291,11 @@ def stereo_calibrate(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2)
 
                 cv.drawChessboardCorners(frame2, (rows, columns), corners2, c_ret2)
                 cv.imshow('img2', frame2)
-                k = cv.waitKey(0)
+                k = cv.waitKey(1)
 
                 objpoints.append(objp)
                 imgpoints_left.append(corners1)
                 imgpoints_right.append(corners2)
-    
-        print(f"Stereo calibration with {valid_frame_count} valid image pairs.")
 
     stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
     ret, CM1, dist1, CM2, dist2, R, T, E, F = cv.stereoCalibrate(objpoints, imgpoints_left, imgpoints_right, mtx1, dist1,
