@@ -52,6 +52,7 @@ pipeline = rs.pipeline()
 # Create a config object
 config = rs.config()
 
+
 # Enable the IR streams (IR1 and IR2)
 config.enable_stream(rs.stream.infrared, 1)  # Enable IR1 (left)
 config.enable_stream(rs.stream.infrared, 2)  # Enable IR2 (right)
