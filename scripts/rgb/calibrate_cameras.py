@@ -26,7 +26,7 @@ for idx, cap in enumerate(captures):
         continue
 
     # Apply settings
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*settings.fourcc))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.height)
     cap.set(cv2.CAP_PROP_FPS, settings.fs)
