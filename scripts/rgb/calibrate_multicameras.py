@@ -10,12 +10,15 @@ sys.path.insert(0, os.path.dirname(repo_path))  # Repo root
 print(sys.path)
 
 from utils.settings import Settings
-from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params, list_cameras_with_v4l2
+from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params, list_cameras_with_v4l2, save_global_cam_params, load_global_cam_params
 
 # Load settings
 settings = Settings()
+config_path= "/root/workspace/ros_ws/src/rt-cosmik/config"
 
-nbr_cam = 3  # Set number of cameras
+
+nbr_cam = 4   # Set number of cameras
+pairs = [(0, 1), (1, 2), (2, 3)]
 
 ## Initialize camera streams
 camera_dict = list_cameras_with_v4l2()
@@ -35,21 +38,22 @@ for idx, cap in enumerate(captures):
 # Create image directories for all cameras
 cam_dirs = []
 for i in range(nbr_cam):
-    dir_path = os.path.join(repo_path, f"images_calib_cam_{i+1}", "color")
+    dir_path = os.path.join(config_path, f"images_calib_cam_{i+1}", "color")
     os.makedirs(dir_path, exist_ok=True)
     cam_dirs.append(dir_path)
 
 # Define paths for camera parameters
 calib_params_paths = [
-    os.path.join(repo_path, "config", "cam_params", f"c{i+1}_params_color.yaml") for i in range(nbr_cam)
+    os.path.join(config_path, "config", "cam_params", f"c{i+1}_params_color.yaml") for i in range(nbr_cam)
 ]
 
 # Define paths for stereo calibration between camera pairs
 stereo_params_paths = {}
-for i in range(nbr_cam):
-    for j in range(i+1, nbr_cam):
-        stereo_params_paths[(i, j)] = os.path.join(repo_path, "config", "cam_params", f"c{i+1}_to_c{j+1}_params_color.yaml")
+for (i, j) in pairs:
+    stereo_params_paths[(i, j)] = os.path.join(
+        config_path, "config", "cam_params", f"c{i+1}_to_c{j+1}_params_color.yaml")
 
+print(stereo_params_paths)
 # Image capturing loop
 img_idx = 0
 try:
@@ -64,8 +68,8 @@ try:
         resized_frames = [cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST) for frame in frames]
 
         # Stack images for visualization (2x2 grid)
-        images_hstack_1 = np.hstack((resized_frames[0], resized_frames[2]))
-        images_hstack_2 = np.hstack((resized_frames[2], resized_frames[1]))
+        images_hstack_1 = np.hstack((resized_frames[0], resized_frames[1]))
+        images_hstack_2 = np.hstack((resized_frames[2], resized_frames[3]))
         images_vstack = np.vstack((images_hstack_1, images_hstack_2))
 
         # Display images
@@ -102,11 +106,6 @@ cv2.destroyAllWindows()
 # Stereo calibration for all camera pairs
 extrinsics = {}
 for (i, j), path in stereo_params_paths.items():
-    if (i, j) == (0, 1): #i know that 0 and 1 will never see the checkoard together
-        print(f"Skipping stereo calibration for cameras {i} and {j} (Checkerboard never visible together)")
-        continue
-    print(i)
-    print(j)
     mtx_1, dist_1 = load_cam_params(calib_params_paths[i])
     mtx_2, dist_2 = load_cam_params(calib_params_paths[j])
 
@@ -114,9 +113,60 @@ for (i, j), path in stereo_params_paths.items():
                                   os.path.join(cam_dirs[i], "*.png"),
                                   os.path.join(cam_dirs[j], "*.png"))
 
-    save_cam_to_cam_params(mtx_1, dist_1, mtx_2, dist_2, R, T, rmse, path)
+    # save_cam_to_cam_params(mtx_1, dist_1, mtx_2, dist_2, R, T, rmse, path)
     extrinsics[(i, j)] = (R, T)
     print(f"Translation from cam {i+1} to cam {j+1}: {T}")
     print(f"rmse cam {i+1} to cam {j+1}: {rmse}")
 
 cv2.destroyAllWindows()
+
+#compute global poses (ref frame is cam0)
+if (0, 1) in extrinsics and (1, 2) in extrinsics and (2, 3) in extrinsics:
+    # Camera 0 (global reference)
+    R0_0 = np.eye(3)
+    T0_0 = np.zeros((3, 1))
+    
+    # Camera 1 pose in camera 0 frame:
+    R01, T01 = extrinsics[(0, 1)]
+    R0_1 = R01
+    T0_1 = T01
+
+    # Camera 2 pose in camera 0 frame:
+    R12, T12 = extrinsics[(1, 2)]
+    R0_2 = R0_1.dot(R12)
+    T0_2 = T0_1 + R0_1.dot(T12)
+
+    # Camera 3 pose in camera 0 frame:
+    R23, T23 = extrinsics[(2, 3)]
+    R0_3 = R0_2.dot(R23)
+    T0_3 = T0_2 + R0_2.dot(T23)
+
+    print("Global poses with camera 0 as reference:")
+    print("\nCamera 0 (reference) pose:")
+    print("Rotation:\n", R0_0)
+    print("Translation:\n", T0_0)
+    print("\nCamera 1 pose in camera 0 frame:")
+    print("Rotation:\n", R0_1)
+    print("Translation:\n", T0_1)
+    print("\nCamera 2 pose in camera 0 frame:")
+    print("Rotation:\n", R0_2)
+    print("Translation:\n", T0_2)
+    print("\nCamera 3 pose in camera 0 frame:")
+    print("Rotation:\n", R0_3)
+    print("Translation:\n", T0_3)
+else:
+    print("Not all required extrinsics for chaining (0,1), (1,2), (2,3) are available.")
+
+global_poses_path = os.path.join(config_path, "config", "cam_params", "global_poses.yaml")
+global_params = {
+    0: (R0_0, T0_0),
+    1: (R0_1, T0_1),
+    2: (R0_2, T0_2),
+    3: (R0_3, T0_3)
+}
+save_global_cam_params(global_params, global_poses_path)
+for i in range (nbr_cam):
+
+    R, T = load_global_cam_params(global_poses_path, i)
+    print("Camera Global Rotation:\n", R)
+    print("Camera Global Translation:\n", T)
