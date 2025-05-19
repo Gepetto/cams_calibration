@@ -136,6 +136,7 @@ try :
         cv2.imshow('Camera 2 Pose Estimation', frame_2)
         cv2.imshow('Camera 3 Pose Estimation', frame_3)
         c = cv2.waitKey(10)
+        print("In one sec you can start typing s after pointing origin, then axis x then axis y for setting world frame and then press q to quit")
         if c == ord('s'):
             print("Images taken")
             # Build the full file paths for the images
