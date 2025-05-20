@@ -19,7 +19,7 @@ import numpy as np
 import cv2
 from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params, list_cameras_with_v4l2
 
-config_path= "/root/workspace/ros_ws/src/rt-cosmik/config"
+config_path= "/root/workspace/ros_ws/src/cams_calibration/config/"
 ## Initialize cams stream
 camera_dict = list_cameras_with_v4l2()
 captures = [cv2.VideoCapture(idx, cv2.CAP_V4L2) for idx in camera_dict.keys()]
