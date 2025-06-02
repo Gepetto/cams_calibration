@@ -20,6 +20,7 @@ from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params
 config_path= "/root/workspace/ros_ws/src/rt-cosmik/config"
 ## Initialize cams stream
 camera_dict = list_cameras_with_v4l2()
+print(camera_dict)
 captures = [cv2.VideoCapture(idx, cv2.CAP_V4L2) for idx in camera_dict.keys()]
 
 for idx, cap in enumerate(captures):
@@ -52,8 +53,8 @@ try:
             continue
 
         # Convert images to numpy arrays
-        color_image_1 = frames[0]
-        color_image_2 = frames[1]
+        color_image_1 = frames[3]
+        color_image_2 = frames[3]
 
         resized_color_image_1 = cv2.resize(color_image_1, (640, 480), interpolation = cv2.INTER_NEAREST)
         resized_color_image_2 = cv2.resize(color_image_2, (640, 480), interpolation = cv2.INTER_NEAREST) 

@@ -5,6 +5,7 @@ import os
 script_path = os.path.abspath(__file__)
 # Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
 repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+config_path="/root/workspace/ros_ws/src/rt-cosmik/"
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
@@ -16,12 +17,13 @@ settings = Settings()
 import cv2
 import numpy as np
 from utils.calib_utils import load_cam_params, save_pose_matrix_to_yaml, get_aruco_pose, get_relative_pose_world_in_cam, list_cameras_with_v4l2
-config_path = '/root/workspace/ros_ws/src/rt-cosmik'
-### Initialize cams stream
-camera_dict = list_cameras_with_v4l2()
-captures = [cv2.VideoCapture(idx, cv2.CAP_V4L2) for idx in camera_dict.keys()]
 
-for idx, cap in enumerate(captures):
+### Initialize cams stream
+cameras = list_cameras_with_v4l2()
+idx_cams = list(cameras.keys())
+
+for idx_cam in idx_cams:
+    cap = cv2.VideoCapture(idx_cam, cv2.CAP_V4L2)
     if not cap.isOpened():
         continue
 
@@ -31,35 +33,25 @@ for idx, cap in enumerate(captures):
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.height)
     cap.set(cv2.CAP_PROP_FPS, settings.fs)
 
-# Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
-os.makedirs(os.path.join(repo_path,"images_world_cam_1","color"), exist_ok=True)
-os.makedirs(os.path.join(repo_path,"images_world_cam_2","color"), exist_ok=True)
-# os.makedirs(os.path.join(repo_path,"images_world_cam_3","color"), exist_ok=True)
-os.makedirs(os.path.join(repo_path,"config","cam_params"), exist_ok=True)
+    # Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
+    os.makedirs(os.path.join(config_path,f"images_world_cam_{idx_cam}","color"), exist_ok=True)
+    os.makedirs(os.path.join(config_path,"config","cam_params"), exist_ok=True)
 
-c1_color_imgs_dir = os.path.join(repo_path, "images_world_cam_1", "color")
-c2_color_imgs_dir = os.path.join(repo_path, "images_world_cam_2", "color")
-# c3_color_imgs_dir = os.path.join(repo_path, "images_world_cam_3", "color")
-c1_color_params_path = os.path.join(repo_path,"config","cam_params","camera1_pose.yaml")
-c2_color_params_path = os.path.join(repo_path,"config","cam_params","camera2_pose.yaml")
-# c3_color_params_path = os.path.join(repo_path,"config","cam_params","camera3_pose.yaml")
+    c_color_imgs_dir = os.path.join(config_path, f"images_world_cam_{idx_cam}", "color")
+    c_color_params_path = os.path.join(config_path,"config","cam_params",f"camera{idx_cam}_pose.yaml")
 
+    globals()[f"K{idx_cam}"], globals()[f"D{idx_cam}"] = load_cam_params(os.path.join(repo_path,"config","cam_params",f"c{idx_cam}_params_color.yaml"))
+
+
+    # Camera intrinsic parameters (from your YAML file)
+    globals()[f"camera_matrix_{idx_cam}"] = globals()[f"K{idx_cam}"]
+
+    # Distortion coefficients (from your YAML file)
+    globals()[f"dist_coeffs_{idx_cam}"] = globals()[f"D{idx_cam}"]
+    
 # Define the ArUco dictionary and marker size
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 marker_size = settings.wand_marker_size  # Marker size in meters (17.6 cm)
-
-K1, D1 = load_cam_params(os.path.join(repo_path,"config","cam_params","c1_params_color.yaml"))
-K2, D2 = load_cam_params(os.path.join(repo_path,"config","cam_params","c2_params_color.yaml"))
-# K3, D3 = load_cam_params(os.path.join(repo_path,"config","cam_params","c3_params_color.yaml"))
-
-# Camera intrinsic parameters (from your YAML file)
-camera_matrix_1 = K1
-camera_matrix_2 = K2
-# camera_matrix_3 = K3
-# Distortion coefficients (from your YAML file)
-dist_coeffs_1 = D1
-dist_coeffs_2 = D2
-# dist_coeffs_3 = D3
 
 # Initialize the ArUco detection parameters
 parameters = cv2.aruco.DetectorParameters()

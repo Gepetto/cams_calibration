@@ -796,6 +796,7 @@ def list_cameras_with_v4l2():
         print("Error using v4l2-ctl:", e)
     # Sort the cameras dictionary by index
     sorted_cameras = {k: cameras[k] for k in sorted(cameras)}
+    print(sorted_cameras)
     return sorted_cameras
 
 def get_cameras_params(K1, D1, K2, D2, R, T):

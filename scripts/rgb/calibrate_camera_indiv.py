@@ -22,7 +22,7 @@ from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params
 config_path= "/root/workspace/ros_ws/src/cams_calibration/config/"
 
 ## Initialize cam stream
-cap = cv2.VideoCapture(idx_cam, cv2.CAP_V4L2)
+cap = cv2.VideoCapture(int(idx_cam), cv2.CAP_V4L2)
 
 if not cap.isOpened():
     print(f"Error: Could not open camera {idx_cam}")
@@ -47,8 +47,7 @@ try:
     while True:
         frame = cap.read()[1]
             
-        if frame == None :
-            continue
+        
 
         # Convert image to numpy array
         color_image = frame
