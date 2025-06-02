@@ -4,8 +4,8 @@ import os
 # Get the absolute path to the current file (script_to_launch.py)
 script_path = os.path.abspath(__file__)
 # Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
-repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-config_path="/root/workspace/ros_ws/src/rt-cosmik/"
+config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+config_path = "/home/ngouget/Codes/rt-cosmik/config"
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
@@ -20,12 +20,12 @@ from utils.calib_utils import load_cam_params, save_pose_matrix_to_yaml, get_aru
 
 ### Initialize cams stream
 cameras = list_cameras_with_v4l2()
-idx_cams = list(cameras.keys())
 
-for idx_cam in idx_cams:
-    cap = cv2.VideoCapture(idx_cam, cv2.CAP_V4L2)
+for idx_cam in cameras.keys():
+    cap = cv2.VideoCapture(int(idx_cam), cv2.CAP_V4L2)
     if not cap.isOpened():
-        continue
+        print(f"Error: Could not open camera {idx_cam}")
+        exit()
 
     # Apply settings
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
@@ -35,20 +35,21 @@ for idx_cam in idx_cams:
 
     # Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
     os.makedirs(os.path.join(config_path,f"images_world_cam_{idx_cam}","color"), exist_ok=True)
-    os.makedirs(os.path.join(config_path,"config","cam_params"), exist_ok=True)
 
-    c_color_imgs_dir = os.path.join(config_path, f"images_world_cam_{idx_cam}", "color")
-    c_color_params_path = os.path.join(config_path,"config","cam_params",f"camera{idx_cam}_pose.yaml")
+    os.makedirs(os.path.join(config_path,"cam_params"), exist_ok=True)
 
-    globals()[f"K{idx_cam}"], globals()[f"D{idx_cam}"] = load_cam_params(os.path.join(repo_path,"config","cam_params",f"c{idx_cam}_params_color.yaml"))
+    globals()[f"c{idx_cam}_color_imgs_dir"] = os.path.join(config_path, f"images_world_cam_{idx_cam}", "color")
 
+    globals()[f"c{idx_cam}_color_params_path"] = os.path.join(config_path,"cam_params",f"camera{idx_cam}_pose.yaml")
+
+    globals()[f"K{idx_cam}"], globals()[f"D{idx_cam}"] = load_cam_params(os.path.join(config_path,"cam_params",f"c{idx_cam}_params_color.yaml"))
 
     # Camera intrinsic parameters (from your YAML file)
     globals()[f"camera_matrix_{idx_cam}"] = globals()[f"K{idx_cam}"]
 
     # Distortion coefficients (from your YAML file)
     globals()[f"dist_coeffs_{idx_cam}"] = globals()[f"D{idx_cam}"]
-    
+
 # Define the ArUco dictionary and marker size
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 marker_size = settings.wand_marker_size  # Marker size in meters (17.6 cm)
@@ -58,8 +59,10 @@ parameters = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
 
 wand_local = settings.wand_end_effector_local_pos
-img_idx=0
 
+captures = [cv2.VideoCapture(idx, cv2.CAP_V4L2) for idx in cameras.keys()]
+
+img_idx=0
 print("In one sec you can start typing s after pointing origin, then axis x then axis y for setting world frame and then press q to quit")
 try : 
     while True:
@@ -68,76 +71,44 @@ try :
         if not all(frame is not None for frame in frames):
             continue
 
-        color_frame_1 = frames[0]
-        color_frame_2 = frames[1]
-        # color_frame_3 = frames[2]
+        for ind, idx_cam in enumerate(cameras.keys()):
+            globals()[f"color_frame_{idx_cam}"] = frames[ind]
 
-        # Convert images to numpy arrays
-        frame_1 = np.asanyarray(color_frame_1.copy())
-        frame_2 = np.asanyarray(color_frame_2.copy())
-        # frame_3 = np.asanyarray(color_frame_3.copy())
+            # Convert images to numpy arrays
+            globals()[f"frame_{idx_cam}"] = np.asanyarray(globals()[f"color_frame_{idx_cam}"].copy())
 
-        # Get the camera pose relative to the global frame defined by the ArUco marker
-        transformation_matrix_1, corners_1, rvec_1, tvec_1 = get_aruco_pose(frame_1, K1, D1, detector, marker_size)
-        transformation_matrix_2, corners_2, rvec_2, tvec_2 = get_aruco_pose(frame_2, K2, D2, detector, marker_size)
-        # transformation_matrix_3, corners_3, rvec_3, tvec_3 = get_aruco_pose(frame_3, K3, D3, detector, marker_size)
+            # Get the camera pose relative to the global frame defined by the ArUco marker
+            globals()[f"transformation_matrix_{idx_cam}"], globals()[f"corners_{idx_cam}"], globals()[f"rvec_{idx_cam}"], globals()[f"tvec_{idx_cam}"] = get_aruco_pose(globals()[f"frame_{idx_cam}"], globals()[f"K{idx_cam}"], globals()[f"D{idx_cam}"], detector, marker_size)
 
-        if transformation_matrix_1 is not None:
-            tip_pos1=tvec_1 + transformation_matrix_1[:3, :3]@wand_local 
 
-            # Project the 3D wand tip position to 2D image coordinates
-            image_points1, _ = cv2.projectPoints(tip_pos1, np.zeros(3,), np.zeros(3,), camera_matrix_1, dist_coeffs_1)
-            image_points1 = image_points1[0][0]
-        
-            # Draw the marker and its pose on the frame for Camera 1
-            cv2.aruco.drawDetectedMarkers(frame_1, [corners_1])
-            cv2.drawFrameAxes(frame_1, K1, D1, rvec_1, tvec_1, 0.1)
+            if globals()[f"transformation_matrix_{idx_cam}"] is not None:
+                globals()[f"tip_pos{idx_cam}"]= globals()[f"tvec_{idx_cam}"] + globals()[f"transformation_matrix_{idx_cam}"][:3, :3]@wand_local 
 
-            # Draw the reprojected wand tip on the image
-            frame_1 = cv2.circle(frame_1, (int(image_points1[0]), int(image_points1[1])), 5, (0, 0, 255), -1)
+                # Project the 3D wand tip position to 2D image coordinates
+                globals()[f"image_points{idx_cam}"], _ = cv2.projectPoints(globals()[f"tip_pos{idx_cam}"], np.zeros(3,), np.zeros(3,), globals()[f"camera_matrix_{idx_cam}"], globals()[f"dist_coeffs_{idx_cam}"])
+                globals()[f"image_points{idx_cam}"] = globals()[f"image_points{idx_cam}"][0][0]
+            
+                # Draw the marker and its pose on the frame for Camera 1
+                cv2.aruco.drawDetectedMarkers(globals()[f"frame_{idx_cam}"], [globals()[f"corners_{idx_cam}"]])
+                cv2.drawFrameAxes(globals()[f"frame_{idx_cam}"], globals()[f"K{idx_cam}"], globals()[f"D{idx_cam}"], globals()[f"rvec_{idx_cam}"], globals()[f"tvec_{idx_cam}"], 0.1)
 
-        if transformation_matrix_2 is not None:
-            tip_pos2=tvec_2 + transformation_matrix_2[:3, :3]@wand_local 
+                # Draw the reprojected wand tip on the image
+                globals()[f"frame_{idx_cam}"] = cv2.circle(globals()[f"frame_{idx_cam}"], (int(globals()[f"image_points{idx_cam}"][0]), int(globals()[f"image_points{idx_cam}"][1])), 5, (0, 0, 255), -1)
 
-            # Project the 3D wand tip position to 2D image coordinates
-            image_points2, _ = cv2.projectPoints(tip_pos2, np.zeros(3,), np.zeros(3,), camera_matrix_2, dist_coeffs_2)
-            image_points2=image_points2[0][0]
-        
-            # Draw the marker and its pose on the frame for Camera 2
-            cv2.aruco.drawDetectedMarkers(frame_2, [corners_2])
-            cv2.drawFrameAxes(frame_2, K2, D2, rvec_2, tvec_2, 0.1)
 
-            # Draw the reprojected wand tip on the image
-            frame_2 = cv2.circle(frame_2, (int(image_points2[0]), int(image_points2[1])), 5, (0, 0, 255), -1)
-        
-        # if transformation_matrix_3 is not None:
-        #     tip_pos3=tvec_3 + transformation_matrix_3[:3, :3]@wand_local 
+            # Display the frames for both cameras
+            cv2.imshow(f'Camera {idx_cam} Pose Estimation', globals()[f"frame_{idx_cam}"])
 
-        #     # Project the 3D wand tip position to 2D image coordinates
-        #     image_points3, _ = cv2.projectPoints(tip_pos3, np.zeros(3,), np.zeros(3,), camera_matrix_3, dist_coeffs_3)
-        #     image_points3=image_points3[0][0]
-        
-        #     # Draw the marker and its pose on the frame for Camera 2
-        #     cv2.aruco.drawDetectedMarkers(frame_3, [corners_3])
-        #     cv2.drawFrameAxes(frame_3, K3, D3, rvec_3, tvec_3, 0.1)
-
-        #     # Draw the reprojected wand tip on the image
-        #     frame_3 = cv2.circle(frame_3, (int(image_points3[0]), int(image_points3[1])), 5, (0, 0, 255), -1)
-
-        # Display the frames for both cameras
-        cv2.imshow('Camera 1 Pose Estimation', frame_1)
-        cv2.imshow('Camera 2 Pose Estimation', frame_2)
-        # cv2.imshow('Camera 3 Pose Estimation', frame_3)
         c = cv2.waitKey(10)
         if c == ord('s'):
             print("Images taken")
-            # Build the full file paths for the images
-            img1_path = os.path.join(c1_color_imgs_dir, "img_" + str(img_idx) + ".png")
-            img2_path = os.path.join(c2_color_imgs_dir, "img_" + str(img_idx) + ".png")
-            # img3_path = os.path.join(c3_color_imgs_dir, "img_" + str(img_idx) + ".png")
-            cv2.imwrite(img1_path, color_frame_1)
-            cv2.imwrite(img2_path, color_frame_2)
-            # cv2.imwrite(img3_path, color_frame_3)
+
+            for idx_cam in cameras.keys():
+                # Build the full file paths for the images
+                globals()[f"img{idx_cam}_path"] = os.path.join(globals()[f"c{idx_cam}_color_imgs_dir"], "img_" + str(img_idx) + ".png")
+
+                cv2.imwrite(globals()[f"img{idx_cam}_path"], globals()[f"color_frame_{idx_cam}"])
+
             img_idx += 1
         if c == ord('q'):
             print("quit")
@@ -148,38 +119,21 @@ finally :
         cap.release()
     cv2.destroyAllWindows()
 
-cam_T1_world, cam_R1_world = get_relative_pose_world_in_cam(os.path.join(c1_color_imgs_dir, "*.png"),K1,D1,detector, marker_size)
+camera_data = []
 
-# Save the rotation matrix and translation vector to a YAML file for Camera 1
-save_pose_matrix_to_yaml(cam_R1_world, cam_T1_world, c1_color_params_path)
+for idx_cam in cameras.keys():
+    globals()[f"cam_T{idx_cam}_world"], globals()[f"cam_R{idx_cam}_world"] = get_relative_pose_world_in_cam(os.path.join(globals()[f"c{idx_cam}_color_imgs_dir"], "*.png"),globals()[f"K{idx_cam}"],globals()[f"D{idx_cam}"],detector, marker_size)
 
-cam_T2_world, cam_R2_world = get_relative_pose_world_in_cam(os.path.join(c2_color_imgs_dir, "*.png"),K2,D2,detector, marker_size)
+    # Save the rotation matrix and translation vector to a YAML file for Camera 1
+    save_pose_matrix_to_yaml(globals()[f"cam_R{idx_cam}_world"], globals()[f"cam_T{idx_cam}_world"], globals()[f"c{idx_cam}_color_params_path"])
 
-# Save the rotation matrix and translation vector to a YAML file for Camera 2
-save_pose_matrix_to_yaml(cam_R2_world, cam_T2_world, c2_color_params_path)
-
-# cam_T3_world, cam_R3_world = get_relative_pose_world_in_cam(os.path.join(c3_color_imgs_dir, "*.png"),K3,D3,detector, marker_size)
-
-# Save the rotation matrix and translation vector to a YAML file for Camera 3
-# save_pose_matrix_to_yaml(cam_R3_world, cam_T3_world, c3_color_params_path)
-
-# Camera transformations 
-camera_data = [
-    {   "K": K1, "D": D1,
-        "cam_T_world": cam_T1_world, "cam_R_world": cam_R1_world,
-        "image": cv2.imread(os.path.join(c1_color_imgs_dir,"img_0.png"))
-    },
-    {
-        "K": K2, "D": D2,
-        "cam_T_world": cam_T2_world, "cam_R_world": cam_R2_world,
-        "image": cv2.imread(os.path.join(c2_color_imgs_dir,"img_0.png"))
-    },
-    # {
-    #     "K": K3, "D": D3,
-    #     "cam_T_world": cam_T3_world, "cam_R_world": cam_R3_world,
-    #     "image": cv2.imread(os.path.join(c3_color_imgs_dir,"img_0.png"))
-    # }
-]
+    # Camera transformations 
+    globals()[f"cam{idx_cam}_data"] = {   
+            "K": globals()[f"K{idx_cam}"], "D": globals()[f"D{idx_cam}"],
+            "cam_T_world": globals()[f"cam_T{idx_cam}_world"], "cam_R_world": globals()[f"cam_R{idx_cam}_world"],
+            "image": cv2.imread(os.path.join(globals()[f"c{idx_cam}_color_imgs_dir"],"img_0.png"))
+        }
+    camera_data.append(globals()[f"cam{idx_cam}_data"])
 
 for cam_data in camera_data:
     cam_R_world = cam_data["cam_R_world"]
