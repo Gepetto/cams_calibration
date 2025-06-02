@@ -5,7 +5,7 @@ import os
 script_path = os.path.abspath(__file__)
 # Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
 config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-config_path = "/home/ngouget/Codes/rt-cosmik/config"
+config_path = "/root/workspace/ros_ws/src/cams_calibration/config"
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
