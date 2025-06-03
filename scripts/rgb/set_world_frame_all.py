@@ -5,7 +5,7 @@ import os
 script_path = os.path.abspath(__file__)
 # Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
 config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-config_path = "/root/workspace/ros_ws/src/cams_calibration/config"
+config_path = "/root/workspace/ros_ws/src/rt-cosmik/config"
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
@@ -21,17 +21,21 @@ from utils.calib_utils import load_cam_params, save_pose_matrix_to_yaml, get_aru
 ### Initialize cams stream
 cameras = list_cameras_with_v4l2()
 
+dict_captures = {f"{idx_cam}" : cv2.VideoCapture(int(idx_cam), cv2.CAP_V4L2) for idx_cam in cameras.keys()}
+
 for idx_cam in cameras.keys():
-    cap = cv2.VideoCapture(int(idx_cam), cv2.CAP_V4L2)
-    if not cap.isOpened():
+
+    globals()[f"cap{idx_cam}"] = dict_captures[f"{idx_cam}"]
+
+    if not globals()[f"cap{idx_cam}"].isOpened():
         print(f"Error: Could not open camera {idx_cam}")
         exit()
-
+    
     # Apply settings
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.height)
-    cap.set(cv2.CAP_PROP_FPS, settings.fs)
+    globals()[f"cap{idx_cam}"].set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    globals()[f"cap{idx_cam}"].set(cv2.CAP_PROP_FRAME_WIDTH, settings.width)
+    globals()[f"cap{idx_cam}"].set(cv2.CAP_PROP_FRAME_HEIGHT, settings.height)
+    globals()[f"cap{idx_cam}"].set(cv2.CAP_PROP_FPS, settings.fs)
 
     # Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
     os.makedirs(os.path.join(config_path,f"images_world_cam_{idx_cam}","color"), exist_ok=True)
@@ -60,19 +64,19 @@ detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
 
 wand_local = settings.wand_end_effector_local_pos
 
-captures = [cv2.VideoCapture(idx, cv2.CAP_V4L2) for idx in cameras.keys()]
-
 img_idx=0
 print("In one sec you can start typing s after pointing origin, then axis x then axis y for setting world frame and then press q to quit")
 try : 
     while True:
-        frames = [cap.read()[1] for cap in captures]
-            
-        if not all(frame is not None for frame in frames):
+
+        for idx_cam in cameras.keys():
+
+            globals()[f"color_frame_{idx_cam}"] = dict_captures[f"{idx_cam}"].read()[1]
+
+        if not all(globals()[f"color_frame_{idx_cam}"] is not None for idx_cam in cameras.keys()):
             continue
 
-        for ind, idx_cam in enumerate(cameras.keys()):
-            globals()[f"color_frame_{idx_cam}"] = frames[ind]
+        for idx_cam in cameras.keys():
 
             # Convert images to numpy arrays
             globals()[f"frame_{idx_cam}"] = np.asanyarray(globals()[f"color_frame_{idx_cam}"].copy())
@@ -96,8 +100,8 @@ try :
                 globals()[f"frame_{idx_cam}"] = cv2.circle(globals()[f"frame_{idx_cam}"], (int(globals()[f"image_points{idx_cam}"][0]), int(globals()[f"image_points{idx_cam}"][1])), 5, (0, 0, 255), -1)
 
 
-            # Display the frames for both cameras
-            cv2.imshow(f'Camera {idx_cam} Pose Estimation', globals()[f"frame_{idx_cam}"])
+            # Display the frames for all cameras
+            cv2.imshow(f'Camera {idx_cam} Visualisation', globals()[f"frame_{idx_cam}"])
 
         c = cv2.waitKey(10)
         if c == ord('s'):
@@ -115,8 +119,8 @@ try :
             break
 finally : 
     # Release the camera captures
-    for cap in captures:
-        cap.release()
+    for idx_cam in cameras.keys():
+        globals()[f"cap{idx_cam}"].release()
     cv2.destroyAllWindows()
 
 camera_data = []

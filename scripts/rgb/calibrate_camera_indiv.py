@@ -19,7 +19,7 @@ import numpy as np
 import cv2
 from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params, list_cameras_with_v4l2
 
-config_path= "/root/workspace/ros_ws/src/cams_calibration/config/"
+config_path= "/root/workspace/ros_ws/src/rt-cosmik/config/"
 
 ## Initialize cam stream
 cap = cv2.VideoCapture(int(idx_cam), cv2.CAP_V4L2)
@@ -45,9 +45,8 @@ img_idx = 0
 print("In one sec you can start typing s to save images for calibration and then press q to quit")
 try:
     while True:
-        frame = cap.read()[1]
-            
         
+        frame = cap.read()[1]
 
         # Convert image to numpy array
         color_image = frame
