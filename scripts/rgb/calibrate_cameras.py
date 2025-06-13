@@ -53,8 +53,8 @@ try:
             continue
 
         # Convert images to numpy arrays
-        color_image_1 = frames[3]
-        color_image_2 = frames[3]
+        color_image_1 = frames[0]
+        color_image_2 = frames[1]
 
         resized_color_image_1 = cv2.resize(color_image_1, (640, 480), interpolation = cv2.INTER_NEAREST)
         resized_color_image_2 = cv2.resize(color_image_2, (640, 480), interpolation = cv2.INTER_NEAREST) 

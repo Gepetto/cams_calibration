@@ -12,9 +12,9 @@ class Settings:
 
     # CAMS CALIB 
     # checkerboard params
-    checkerboard_rows: int = 7# number of rows on the checkerboard -1 
-    checkerboard_columns: int = 10 # number of columns on the checkerboard -1 
-    checkerboard_scaling: float = 0.025 # size of squares in meters
+    checkerboard_rows: int = 6 # number of rows on the checkerboard -1 
+    checkerboard_columns: int = 7 # number of columns on the checkerboard -1 
+    checkerboard_scaling: float = 0.108 # size of squares in meters
     # wand params
     wand_end_effector_local_pos: np.ndarray = field(
         default_factory=lambda: np.array([[0.000], [0.271], [0.000]]) # local pose of wand's end effector for pointing calibration
