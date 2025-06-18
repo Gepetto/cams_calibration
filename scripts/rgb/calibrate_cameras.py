@@ -1,11 +1,6 @@
 # To run the code from repo root : python3 scripts/rgb/calibrate_cameras.py
 
 import os
-# Get the absolute path to the current file (script_to_launch.py)
-script_path = os.path.abspath(__file__)
-# Go up two directories: from 'rgb' to 'scripts', then from 'scripts' to 'repo'
-repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
 
@@ -15,13 +10,14 @@ settings = Settings()
 
 import numpy as np
 import cv2
-from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params, list_cameras_with_v4l2
+from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params
 
-config_path= "/root/workspace/ros_ws/src/rt-cosmik/config"
+config_path = "C:\\Users\\krauszm\\COSMIK\\rt-cosmik\\config"
 ## Initialize cams stream
-camera_dict = list_cameras_with_v4l2()
+# camera_dict = list_cameras_opencv()
+camera_dict = {2 : "Intel(R) RealSense(TM) Depth Camera 455  RGB", 4 : "Intel(R) RealSense(TM) Depth Camera 455  RGB"}
 print(camera_dict)
-captures = [cv2.VideoCapture(idx, cv2.CAP_V4L2) for idx in camera_dict.keys()]
+captures = [cv2.VideoCapture(idx, cv2.CAP_DSHOW) for idx in camera_dict.keys()]
 
 for idx, cap in enumerate(captures):
     if not cap.isOpened():
@@ -56,8 +52,8 @@ try:
         color_image_1 = frames[0]
         color_image_2 = frames[1]
 
-        resized_color_image_1 = cv2.resize(color_image_1, (640, 480), interpolation = cv2.INTER_NEAREST)
-        resized_color_image_2 = cv2.resize(color_image_2, (640, 480), interpolation = cv2.INTER_NEAREST) 
+        resized_color_image_1 = cv2.resize(color_image_1, (640, 400), interpolation = cv2.INTER_NEAREST)
+        resized_color_image_2 = cv2.resize(color_image_2, (640, 400), interpolation = cv2.INTER_NEAREST) 
 
         images_hstack_1 = np.hstack((resized_color_image_1, resized_color_image_2))
         

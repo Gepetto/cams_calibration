@@ -836,3 +836,28 @@ def get_cameras_params(K1, D1, K2, D2, R, T):
         dists.append(dict_cam[cam]["dist"])
         mtxs.append(dict_cam[cam]["mtx"])
     return mtxs, dists, projections, rotations, translations
+
+def list_cameras_opencv(max_tested=10):
+    try:
+        import win32com.client
+        wmi = win32com.client.GetObject("winmgmts:")
+        devices = wmi.InstancesOf("Win32_PnPEntity")
+        print(devices)
+        camera_names = [d.Name for d in devices if d.Name and 'camera' in d.Name.lower()]
+        print(camera_names)
+    except ImportError:
+        camera_names = []
+
+    cam_dict = {}
+    found_idx = 0
+    for idx in range(max_tested):
+        cap = cv.VideoCapture(idx)
+        if cap.read()[0]:
+            # Try to get a friendly name if available
+            if found_idx < len(camera_names):
+                cam_dict[idx] = camera_names[found_idx]
+            else:
+                cam_dict[idx] = f"Camera {idx}"
+            found_idx += 1
+        cap.release()
+    return cam_dict
