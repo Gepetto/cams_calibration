@@ -7,7 +7,7 @@ class Settings:
     # CAM PARAMS
     fs: int = 30
     width: int = 1280 # image resolution
-    height: int = 800 # image resolution
+    height: int = 720 # image resolution
     fourcc: str = "I420" # video codec
 
     # CAMS CALIB 

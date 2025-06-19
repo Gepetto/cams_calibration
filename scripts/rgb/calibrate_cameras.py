@@ -2,6 +2,7 @@
 
 import os
 import sys
+import shutil
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # Repo root
 
 from utils.settings import Settings
@@ -13,11 +14,33 @@ import cv2
 from utils.calib_utils import calibrate_camera, save_cam_params, load_cam_params, stereo_calibrate, save_cam_to_cam_params
 
 config_path = "C:\\Users\\krauszm\\COSMIK\\rt-cosmik\\config"
+
+# remove old config
+old_config_path = os.path.join(config_path, "images_calib_cam_1")
+if os.path.exists(old_config_path):
+    shutil.rmtree(old_config_path)
+old_config_path = os.path.join(config_path, "images_calib_cam_2")
+if os.path.exists(old_config_path):
+    shutil.rmtree(old_config_path)
+old_config_path = os.path.join(config_path, "cam_params", "c1_to_c2_params_color.yaml")
+if os.path.isfile(old_config_path):
+    os.remove(old_config_path)
+old_config_path = os.path.join(config_path, "cam_params", "c1_params_color.yaml")
+if os.path.isfile(old_config_path):
+    os.remove(old_config_path)
+old_config_path = os.path.join(config_path, "cam_params", "c2_params_color.yaml")
+if os.path.isfile(old_config_path):
+    os.remove(old_config_path)
+
 ## Initialize cams stream
-# camera_dict = list_cameras_opencv()
-camera_dict = {2 : "Intel(R) RealSense(TM) Depth Camera 455  RGB", 4 : "Intel(R) RealSense(TM) Depth Camera 455  RGB"}
+camera_dict = {int(sys.argv[1]) : "Intel(R) RealSense(TM) Depth Camera 455  RGB", int(sys.argv[2]) : "Intel(R) RealSense(TM) Depth Camera 455  RGB"}
+captures = [cv2.VideoCapture(idx) for idx in camera_dict.keys()]
+for idx, cap in enumerate(captures):
+        if not cap.isOpened():
+            cap.release()
+            raise KeyError("Check if cameras indexes you typed are good.")
+
 print(camera_dict)
-captures = [cv2.VideoCapture(idx, cv2.CAP_DSHOW) for idx in camera_dict.keys()]
 
 for idx, cap in enumerate(captures):
     if not cap.isOpened():
