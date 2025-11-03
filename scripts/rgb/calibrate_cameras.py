@@ -34,15 +34,15 @@ for idx, cap in enumerate(captures):
     cap.set(cv2.CAP_PROP_FPS, settings.fs)
 
 # Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
-os.makedirs(os.path.join(config_path,"images_calib_cam_1","color"), exist_ok=True)
+os.makedirs(os.path.join(config_path,"images_calib_cam_0","color"), exist_ok=True)
 os.makedirs(os.path.join(config_path,"images_calib_cam_2","color"), exist_ok=True)
 
 # Define paths 
-c1_color_imgs_dir = os.path.join(config_path, "images_calib_cam_1", "color")
+c1_color_imgs_dir = os.path.join(config_path, "images_calib_cam_0", "color")
 c2_color_imgs_dir = os.path.join(config_path, "images_calib_cam_2", "color")
-c1_color_params_path = os.path.join(config_path,"cam_params","c1_params_color.yaml")
+c1_color_params_path = os.path.join(config_path,"cam_params","c0_params_color.yaml")
 c2_color_params_path = os.path.join(config_path,"cam_params","c2_params_color.yaml")
-c1_to_c2_color_params_path = os.path.join(config_path,"cam_params","c1_to_c2_params_color.yaml")
+c1_to_c2_color_params_path = os.path.join(config_path,"cam_params","c0_to_c2_params_color.yaml")
 
 img_idx = 0
 try:
@@ -53,8 +53,8 @@ try:
             continue
 
         # Convert images to numpy arrays
-        color_image_1 = frames[3]
-        color_image_2 = frames[3]
+        color_image_1 = frames[0]
+        color_image_2 = frames[1]
 
         resized_color_image_1 = cv2.resize(color_image_1, (640, 480), interpolation = cv2.INTER_NEAREST)
         resized_color_image_2 = cv2.resize(color_image_2, (640, 480), interpolation = cv2.INTER_NEAREST) 

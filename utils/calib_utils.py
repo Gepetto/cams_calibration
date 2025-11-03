@@ -691,7 +691,48 @@ def get_relative_pose_world_in_cam(images_folder,camera_matrix,dist_coeffs, dete
     cam_R_world = np.column_stack((x_axis, y_axis, z_axis))
 
     return cam_center_world, cam_R_world
-    
+
+def get_relative_pose_world_in_cam2(images_folder,camera_matrix,dist_coeffs, detector, marker_size):
+    images_names = sorted(glob.glob(images_folder))
+    images = []
+    for imname in images_names:
+        im = cv.imread(imname, 1)
+        images.append(im)
+
+    for ii, frame in enumerate(images):
+        # Convert the frame to grayscale
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+        marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
+                                [marker_size / 2, marker_size / 2, 0],
+                                [marker_size / 2, -marker_size / 2, 0],
+                                [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
+        
+        # Detect the markers in the image
+        corners, ids, _ = detector.detectMarkers(gray)
+        
+        if ids is not None and len(corners) > 0:
+            # Extract the corners of the first detected marker for pose estimation
+            # Reshape the first marker's corners for solvePnP
+            corners_for_solvePnP = corners[0].reshape(-1, 2)
+            
+            # Estimate the pose of each marker
+            _, R, t = cv.solvePnP(marker_points, corners_for_solvePnP, camera_matrix, dist_coeffs, False, cv.SOLVEPNP_IPPE_SQUARE)
+            
+            # Convert the rotation vector to a rotation matrix
+            rotation_matrix, _ = cv.Rodrigues(R)
+            
+            # Now we can form the transformation matrix
+            transformation_matrix = np.eye(4)
+            transformation_matrix[:3, :3] = rotation_matrix
+            transformation_matrix[:3, 3] = t.flatten()
+        
+    # 1. Construct the rotation matrix
+    cam_R_world = rotation_matrix
+    t_final = t.flatten()
+
+    return t_final, cam_R_world
+
 # Function to save the translation vector to a YAML file
 def save_pose_rpy_to_yaml(translation_vector, rotation_sequence, filename):
 
