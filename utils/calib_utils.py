@@ -1011,25 +1011,25 @@ class PoseTrackerEstimator:
         scores = keypoints[..., 2]
         keypoints = (keypoints[..., :2] * scale).astype(int)
         bboxes *= scale
-        img = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
+        img = cv.resize(frame, (0, 0), fx=scale, fy=scale)
 
         for kpts, score, bbox in zip(keypoints, scores, bboxes):
             show = [1] * len(kpts)
 
             for (u, v), color in zip(skeleton, link_color):
                 if score[u] > self._thr and score[v] > self._thr:
-                    cv2.line(img, kpts[u], tuple(kpts[v]), palette[color], 1,
-                            cv2.LINE_AA)
+                    cv.line(img, kpts[u], tuple(kpts[v]), palette[color], 1,
+                            cv.LINE_AA)
                 else:
                     show[u] = show[v] = 0
 
             for kpt, show, color in zip(kpts, show, point_color):
                 if show:
-                    cv2.circle(img, kpt, 1, palette[color], 2, cv2.LINE_AA)
+                    cv.circle(img, kpt, 1, palette[color], 2, cv.LINE_AA)
            
-        cv2.imshow('pose_tracker'+str(idx), img)
+        cv.imshow('pose_tracker'+str(idx), img)
         # If 'q' is pressed, exit visualization
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv.waitKey(1) & 0xFF == ord('q'):
             return False
 
         return True
@@ -1074,9 +1074,9 @@ def triangulate_points(keypoints_list, mtxs, dists, projections):
     Triangulates 3D points from multiple 2D keypoints using camera matrices and distortion coefficients.
     Args:
         keypoints_list (list of list of tuples): A list where each element is a list of 2D keypoints for a single frame.
-        mtxs (list of numpy.ndarray): A list of camera matrices for each frame.
-        dists (list of numpy.ndarray): A list of distortion coefficients for each frame.
-        projections (list of numpy.ndarray): A list of projection matrices for each frame.
+        mtxs (list of numpy.ndarray): A list of camera matrices (K) for each frame.
+        dists (list of numpy.ndarray): A list of distortion coefficients (D) for each frame.
+        projections (list of numpy.ndarray): A list of projection matrices (R,t) for each frame.
     Returns:
         numpy.ndarray: An array of 3D points triangulated from the input 2D keypoints.
     """
@@ -1087,7 +1087,7 @@ def triangulate_points(keypoints_list, mtxs, dists, projections):
     for ii in range(len(keypoints_list)):
         points = keypoints_list[ii] 
         distCoeffs_mat = np.array([dists[ii]]).reshape(-1, 1)
-        points_undistorted = cv2.undistortPoints(np.array(points).reshape(-1, 1, 2), mtxs[ii], distCoeffs_mat)
+        points_undistorted = cv.undistortPoints(np.array(points).reshape(-1, 1, 2), mtxs[ii], distCoeffs_mat)
         undistorted_points.append(points_undistorted)
 
     for point_idx in range(26):
@@ -1096,3 +1096,32 @@ def triangulate_points(keypoints_list, mtxs, dists, projections):
         p3ds_frame.append(_p3d)
 
     return np.array(p3ds_frame)
+
+def calculate_anthropometric_segment_lengths(height, gender):
+    lengths_names = [
+            "L_pelvis_width",
+            "L_abdomen",
+            "L_thorax_cerv",
+            "L_thorax_supr",
+            "L_upperarm",
+            "L_lowerarm",
+            "L_upperleg",
+            "L_lowerleg",
+        ]
+
+    ratios = np.array(
+        [
+            0.0634 if gender == "f" else 0.0505,  # L_pelvis_width (Dumas 2007)
+            0.1183 if gender == "f" else 0.1237,  # L_abdomen MPT  from XYP to OMPH (De Leva 1996)
+            0.1314 if gender == "f" else 0.1390,  # L_thorax UPT from CERV to XYPH (De Leva 1996)
+            0.0821 if gender == "f" else 0.0980,  # from SUPR to XYPH (De Leva 1996)
+            0.1510 if gender == "f" else 0.1531,  # L_upperarm (Dumas 2007)
+            0.1534 if gender == "f" else 0.1593,  # L_lowerarm (Dumas 2007)
+            0.2354 if gender == "f" else 0.2441,  # L_upperleg (Dumas 2007)
+            0.2410 if gender == "f" else 0.2446,  # L_lowerleg (Dumas 2007)
+        ]
+    )
+
+    lengths = np.round(ratios * height, 3)  # mm accuracy
+    dict_lengths = dict(zip(lengths_names, lengths))
+    return dict_lengths

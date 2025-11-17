@@ -31,3 +31,7 @@ class Settings:
     det_model_path: str = "/root/workspace/mmdeploy/rtmpose-trt/rtmdet-nano" # absolute path
     pose_model_path: str = "/root/workspace/mmdeploy/rtmpose-trt/rtmpose-m" # absolute path 
 
+    #Calibration using RTMPOSE
+    subject_height: float = 1.80 # meter
+    subject_gender: str = "m" # "m" or "f"
+

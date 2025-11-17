@@ -19,7 +19,9 @@ from utils.calib_utils import (
     list_cameras_with_v4l2,
     load_cam_params,
     save_cam_to_cam_params,
+    load_cam_to_cam_params,
     PoseTrackerEstimator,
+    triangulate_points,
 )
 
 settings = Settings()
@@ -356,14 +358,14 @@ def estimate_extrinsics_from_keypoints(
     conf_thresh=0.5,
 ):
     """
-    Estimate (R, T) between cam2 and cam1 from RTMPose 2D keypoints.
+    Estimate (R, T) between *camera 2* and *camera 1* from RTMPose 2D keypoints.
 
     Pipeline:
         - build 2D-2D correspondences across all frames/joints
         - undistort to normalized coordinates
         - estimate essential matrix with RANSAC
         - recover pose (R, t)
-        - compute reprojection RMSE (for info)
+        - compute reprojection RMSE (for info, using triangulate_points)
     """
     pts1_pix, pts2_pix = build_correspondences(kps1, kps2, conf1, conf2, conf_thresh)
 
@@ -394,63 +396,100 @@ def estimate_extrinsics_from_keypoints(
 
     _, R, t, _ = cv2.recoverPose(E, pts1_in, pts2_in)
 
-    # Compute reprojection RMSE over all valid measurements (not only inliers)
-    rmse = compute_reprojection_rmse(kps1, kps2, conf1, conf2, K1, D1, K2, D2, R, t)
+    # Compute reprojection RMSE using triangulate_points (pairwise case)
+    rmse = compute_reprojection_rmse_pair(kps1, kps2, conf1, conf2, K1, D1, K2, D2, R, t, conf_thresh)
     return R, t, rmse
 
 
-def compute_reprojection_rmse(kps1, kps2, conf1, conf2, K1, D1, K2, D2, R, t, conf_thresh=0.5):
+def compute_reprojection_rmse_pair(
+    kps1,
+    kps2,
+    conf1,
+    conf2,
+    K1,
+    D1,
+    K2,
+    D2,
+    R,
+    t,
+    conf_thresh=0.5,
+):
     """
-    Use current (R, t) to triangulate each joint and reproject back
-    to both cameras; compute RMS error in pixels.
+    Use current (R, t) to triangulate each joint (via triangulate_points)
+    and reproject back to both cameras; compute RMS error in pixels.
+
+    - kps1, kps2: (T, J, 2)
+    - conf1, conf2: (T, J)
+    - R, t: transform from cam1 frame to cam2 frame (X2 = R * X1 + t)
+    - Assumes RTMPose body26 => at least 26 joints.
     """
     T, J, _ = kps1.shape
+    if J < 26:
+        raise ValueError(
+            f"triangulate_points currently assumes 26 joints (body26). "
+            f"Got J = {J}."
+        )
+
+    # We will use only the first 26 joints for triangulation
+    J3d = 26
+
+    # Prepare camera matrices/distortions/projections in normalized space
+    mtxs = [K1, K2]
+    dists = [D1, D2]
+    P1 = np.hstack([np.eye(3), np.zeros((3, 1))])        # cam1 at origin
+    P2 = np.hstack([R, t.reshape(3, 1)])                 # cam2 in cam1 frame
+    projections = [P1, P2]
+
     total_err = 0.0
     total_count = 0
 
-    P1 = np.hstack([np.eye(3), np.zeros((3, 1))])   # cam1 at origin
-    P2 = np.hstack([R, t.reshape(3, 1)])            # cam2 in cam1 frame
-
     for t_idx in range(T):
-        for j in range(J):
+        # For this frame, assemble 2D keypoints for each camera
+        # Use only the first 26 joints (body26)
+        kps_frame_cam1 = kps1[t_idx, :J3d, :]
+        kps_frame_cam2 = kps2[t_idx, :J3d, :]
+
+        keypoints_list_frame = [kps_frame_cam1, kps_frame_cam2]
+
+        # 3D triangulation in cam1 frame
+        p3d_frame = triangulate_points(
+            keypoints_list_frame,
+            mtxs,
+            dists,
+            projections,
+        )  # shape (26, 3)
+
+        # Reprojection + error accumulation
+        for j in range(J3d):
             if conf1[t_idx, j] <= conf_thresh or conf2[t_idx, j] <= conf_thresh:
                 continue
 
-            p1_pix = kps1[t_idx, j]
-            p2_pix = kps2[t_idx, j]
+            X = p3d_frame[j]  # (3,)
 
-            # undistort -> normalized coords
-            p1n = cv2.undistortPoints(
-                p1_pix.reshape(1, 1, 2), K1, D1
-            ).reshape(2)
-            p2n = cv2.undistortPoints(
-                p2_pix.reshape(1, 1, 2), K2, D2
-            ).reshape(2)
-
-            X_h = cv2.triangulatePoints(
-                P1, P2, p1n.reshape(2, 1), p2n.reshape(2, 1)
-            )
-            X = (X_h[:3] / X_h[3])[:, 0]  # (3,)
-
-            # Reproject to cam1
+            # Cam1: X already expressed in cam1 frame
             Xc1 = X
-            p1n_hat = Xc1[:2] / Xc1[2]
-            p1_pix_hat = (K1 @ np.array([p1n_hat[0], p1n_hat[1], 1.0]))[:2]
+            x1 = Xc1[:2] / Xc1[2]
+            p1_hat = (K1 @ np.array([x1[0], x1[1], 1.0]))[:2]
+            p1_true = kps1[t_idx, j]
 
-            # Reproject to cam2
+            # Cam2: transform to cam2 frame using R, t
             Xc2 = R @ X + t.reshape(3)
-            p2n_hat = Xc2[:2] / Xc2[2]
-            p2_pix_hat = (K2 @ np.array([p2n_hat[0], p2n_hat[1], 1.0]))[:2]
+            x2 = Xc2[:2] / Xc2[2]
+            p2_hat = (K2 @ np.array([x2[0], x2[1], 1.0]))[:2]
+            p2_true = kps2[t_idx, j]
 
-            err1 = np.sum((p1_pix_hat - p1_pix) ** 2)
-            err2 = np.sum((p2_pix_hat - p2_pix) ** 2)
+            err1 = np.sum((p1_hat - p1_true) ** 2)
+            err2 = np.sum((p2_hat - p2_true) ** 2)
 
             total_err += err1 + err2
             total_count += 2
 
     if total_count == 0:
         return np.nan
-    return float(np.sqrt(total_err / total_count))
+
+    rmse = float(np.sqrt(total_err / total_count))
+    return rmse
+
 
 
 # -------------------------------------------------------------------
@@ -466,6 +505,9 @@ def calibrate_from_last_session(
     Take the *last* recorded session, and for each camera (except base_cam),
     estimate extrinsics w.r.t. base_cam from RTMPose keypoints.
 
+    Also, if checkerboard stereo extrinsics exist, compute the reprojection
+    RMSE using them (for comparison).
+
     Saves YAML files like:
         config/cam_params/c<base>_to_c<other>_params_color_rtmpose.yaml
     """
@@ -480,9 +522,6 @@ def calibrate_from_last_session(
         return
 
     base_cam = cam_indices[0]  # smallest index
-    if base_cam not in cam_indices:
-        raise ValueError(f"Base camera {base_cam} not present in last session.")
-
     print(f"\nCalibrating extrinsics using last session, base camera = {base_cam}")
     print("Session videos:")
     for cam_idx, path in last_session.items():
@@ -539,14 +578,35 @@ def calibrate_from_last_session(
                 f"and cam {cam_idx} ({kps2.shape[1]})"
             )
 
-        print(f"Estimating extrinsics between cam {base_cam} and cam {cam_idx}...")
-        R, t, rmse = estimate_extrinsics_from_keypoints(
-            kps1, kps2, c1, c2, K[base_cam], D[base_cam], K[cam_idx], D[cam_idx],
+        print(f"Estimating extrinsics between cam {base_cam} and cam {cam_idx} (RTMPose)...")
+        R_rtmpose, t_rtmpose, rmse_rtmpose = estimate_extrinsics_from_keypoints(
+            kps1, kps2, c1, c2,
+            K[base_cam], D[base_cam],
+            K[cam_idx], D[cam_idx],
             conf_thresh=0.5,
         )
 
-        print(f"  -> RMSE reprojection error: {rmse:.3f} pixels")
-        # Save stereo parameters
+        print(f"  -> RMSE (RTMPose extrinsics): {rmse_rtmpose:.3f} pixels")
+
+        # --- Compare with checkerboard extrinsics, if available ---
+        stereo_cb_path = os.path.join(
+            cam_params_dir,
+            f"c{base_cam}_to_c{cam_idx}_params_color.yaml",
+        )
+        if os.path.exists(stereo_cb_path):
+            R_cb, T_cb = load_cam_to_cam_params(stereo_cb_path)
+            rmse_cb = compute_reprojection_rmse_pair(
+                kps1, kps2, c1, c2,
+                K[base_cam], D[base_cam],
+                K[cam_idx], D[cam_idx],
+                R_cb, T_cb,
+                conf_thresh=0.5,
+            )
+            print(f"  -> RMSE (checkerboard extrinsics): {rmse_cb:.3f} pixels")
+        else:
+            print("  (No checkerboard stereo file found, skipping checkerboard RMSE)")
+
+        # Save RTMPose-based stereo parameters
         out_path = os.path.join(
             cam_params_dir,
             f"c{base_cam}_to_c{cam_idx}_params_color_rtmpose.yaml",
@@ -556,12 +616,12 @@ def calibrate_from_last_session(
             D[base_cam],
             K[cam_idx],
             D[cam_idx],
-            R,
-            t.reshape(3, 1),
-            rmse,
+            R_rtmpose,
+            t_rtmpose.reshape(3, 1),
+            rmse_rtmpose,
             out_path,
         )
-        print(f"  Saved extrinsics to: {out_path}")
+        print(f"  Saved RTMPose extrinsics to: {out_path}")
 
 
 # -------------------------------------------------------------------
