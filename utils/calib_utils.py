@@ -3,6 +3,7 @@ import yaml
 import glob
 import numpy as np
 import subprocess
+from mmdeploy_runtime import PoseTracker
 from utils.settings import Settings
 
 settings = Settings()
@@ -877,3 +878,221 @@ def get_cameras_params(K1, D1, K2, D2, R, T):
         dists.append(dict_cam[cam]["dist"])
         mtxs.append(dict_cam[cam]["mtx"])
     return mtxs, dists, projections, rotations, translations
+
+
+# MMPOSE VISUALISATION CONFIG
+# This configuration is used to define the skeleton, palette, link color, point color, and sigmas for the visualization of the pose estimator.
+
+VISUALIZATION_CFG = dict(
+    body26=dict(
+        skeleton = [(0, 1), (0, 2), (1, 3), (2, 4), (3, 5), (4, 6), (1, 2), (5, 18),(6, 18), (17,18), # Head, shoulders, and neck connections
+                    (5, 7), (7, 9),                                                              # Right arm connections
+                    (6, 8), (8, 10),                                                             # Left arm connections
+                    (18, 19),                                                                    # Trunk connection
+                    (11, 13), (13, 15), (15, 20), (15, 22), (15, 24),                            # Left leg and foot connections
+                    (12, 14), (14, 16), (16, 21), (16, 23), (16, 25),                            # Right leg and foot connections
+                    (12, 19), (11, 19)],                                                         # Hip connection
+
+        # Updated palette
+        palette = [[51, 153, 255], [0, 255, 0], [255, 128, 0], [255, 255, 255],
+               [255, 153, 255], [102, 178, 255], [255, 51, 51]],
+    
+        # Updated link color
+        link_color = [
+            1, 1, 2, 2, 0, 0, 0, 0, 1, 2, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2,
+            2, 2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 1, 1, 1, 1, 2, 2, 2,
+            2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 1, 1, 1, 1
+        ],
+
+        # Updated point color
+        point_color = [
+            0, 0, 0, 0, 0, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 3,
+            3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+            3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+            3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
+            5, 5, 5, 5, 6, 6, 6, 6, 1, 1, 1, 1, 3, 2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5,
+            5, 6, 6, 6, 6, 1, 1, 1, 1
+        ],
+        sigmas = [0.026] * 26
+    ),
+    body17=dict(
+        skeleton=[(15, 13), (13, 11), (16, 14), (14, 12), (11, 12), (5, 11),
+                  (6, 12), (5, 6), (5, 7), (6, 8), (7, 9), (8, 10), (1, 2),
+                  (0, 1), (0, 2), (1, 3), (2, 4), (3, 5), (4, 6)],
+        palette=[(255, 128, 0), (255, 153, 51), (255, 178, 102), (230, 230, 0),
+                 (255, 153, 255), (153, 204, 255), (255, 102, 255),
+                 (255, 51, 255), (102, 178, 255), (51, 153, 255),
+                 (255, 153, 153), (255, 102, 102), (255, 51, 51),
+                 (153, 255, 153), (102, 255, 102), (51, 255, 51), (0, 255, 0),
+                 (0, 0, 255), (255, 0, 0), (255, 255, 255)],
+        link_color=[
+            0, 0, 0, 0, 7, 7, 7, 9, 9, 9, 9, 9, 16, 16, 16, 16, 16, 16, 16
+        ],
+        point_color=[16, 16, 16, 16, 16, 9, 9, 9, 9, 9, 9, 0, 0, 0, 0, 0, 0],
+        sigmas=[
+            0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072,
+            0.062, 0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089
+        ]),
+    coco_wholebody=dict(
+        skeleton=[(15, 13), (13, 11), (16, 14), (14, 12), (11, 12), (5, 11),
+                  (6, 12), (5, 6), (5, 7), (6, 8), (7, 9), (8, 10), (1, 2),
+                  (0, 1), (0, 2), (1, 3), (2, 4), (3, 5), (4, 6), (15, 17),
+                  (15, 18), (15, 19), (16, 20), (16, 21), (16, 22), (91, 92),
+                  (92, 93), (93, 94), (94, 95), (91, 96), (96, 97), (97, 98),
+                  (98, 99), (91, 100), (100, 101), (101, 102), (102, 103),
+                  (91, 104), (104, 105), (105, 106), (106, 107), (91, 108),
+                  (108, 109), (109, 110), (110, 111), (112, 113), (113, 114),
+                  (114, 115), (115, 116), (112, 117), (117, 118), (118, 119),
+                  (119, 120), (112, 121), (121, 122), (122, 123), (123, 124),
+                  (112, 125), (125, 126), (126, 127), (127, 128), (112, 129),
+                  (129, 130), (130, 131), (131, 132)],
+        palette=[(51, 153, 255), (0, 255, 0), (255, 128, 0), (255, 255, 255),
+                 (255, 153, 255), (102, 178, 255), (255, 51, 51)],
+        link_color=[
+            1, 1, 2, 2, 0, 0, 0, 0, 1, 2, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+            2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 1, 1, 1,
+            1, 2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 1, 1, 1, 1
+        ],
+        point_color=[
+            0, 0, 0, 0, 0, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 2, 2, 2, 2, 2,
+            2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+            3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+            3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+            3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 1, 1,
+            1, 1, 3, 2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 1, 1, 1, 1
+        ],
+        sigmas=[
+            0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072,
+            0.062, 0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089, 0.068,
+            0.066, 0.066, 0.092, 0.094, 0.094, 0.042, 0.043, 0.044, 0.043,
+            0.040, 0.035, 0.031, 0.025, 0.020, 0.023, 0.029, 0.032, 0.037,
+            0.038, 0.043, 0.041, 0.045, 0.013, 0.012, 0.011, 0.011, 0.012,
+            0.012, 0.011, 0.011, 0.013, 0.015, 0.009, 0.007, 0.007, 0.007,
+            0.012, 0.009, 0.008, 0.016, 0.010, 0.017, 0.011, 0.009, 0.011,
+            0.009, 0.007, 0.013, 0.008, 0.011, 0.012, 0.010, 0.034, 0.008,
+            0.008, 0.009, 0.008, 0.008, 0.007, 0.010, 0.008, 0.009, 0.009,
+            0.009, 0.007, 0.007, 0.008, 0.011, 0.008, 0.008, 0.008, 0.01,
+            0.008, 0.029, 0.022, 0.035, 0.037, 0.047, 0.026, 0.025, 0.024,
+            0.035, 0.018, 0.024, 0.022, 0.026, 0.017, 0.021, 0.021, 0.032,
+            0.02, 0.019, 0.022, 0.031, 0.029, 0.022, 0.035, 0.037, 0.047,
+            0.026, 0.025, 0.024, 0.035, 0.018, 0.024, 0.022, 0.026, 0.017,
+            0.021, 0.021, 0.032, 0.02, 0.019, 0.022, 0.031
+        ]))
+
+class PoseTrackerEstimator:
+    def __init__(self, det_model, pose_model, device='cuda', thr=0.1, skeleton = 'body26'):
+        self._det_model = det_model
+        self._pose_model = pose_model
+        self._device = device
+        self._thr = thr
+        self._skeleton = skeleton
+        self.tracker = PoseTracker(det_model, pose_model, device)
+        self.VISUALISATION_CFG = VISUALIZATION_CFG
+        self.sigmas = VISUALIZATION_CFG[self._skeleton]['sigmas']
+        self.state =  self.tracker.create_state(det_interval=1, det_min_bbox_size=100, keypoint_sigmas=self.sigmas)
+
+    def estimate(self, frame):
+        results = self.tracker(self.state, frame, detect=-1)
+        return results
+    
+    def visualize(self, 
+                  frame,
+                  results,
+                  idx,
+                  resize=1280):
+        
+        skeleton = self.VISUALISATION_CFG[self._skeleton]['skeleton']
+        palette = self.VISUALISATION_CFG[self._skeleton]['palette']
+        link_color = self.VISUALISATION_CFG[self._skeleton]['link_color']
+        point_color = self.VISUALISATION_CFG[self._skeleton]['point_color']
+
+        scale = resize / max(frame.shape[0], frame.shape[1])
+        keypoints, bboxes, _ = results
+        scores = keypoints[..., 2]
+        keypoints = (keypoints[..., :2] * scale).astype(int)
+        bboxes *= scale
+        img = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
+
+        for kpts, score, bbox in zip(keypoints, scores, bboxes):
+            show = [1] * len(kpts)
+
+            for (u, v), color in zip(skeleton, link_color):
+                if score[u] > self._thr and score[v] > self._thr:
+                    cv2.line(img, kpts[u], tuple(kpts[v]), palette[color], 1,
+                            cv2.LINE_AA)
+                else:
+                    show[u] = show[v] = 0
+
+            for kpt, show, color in zip(kpts, show, point_color):
+                if show:
+                    cv2.circle(img, kpt, 1, palette[color], 2, cv2.LINE_AA)
+           
+        cv2.imshow('pose_tracker'+str(idx), img)
+        # If 'q' is pressed, exit visualization
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            return False
+
+        return True
+
+def DLT(projections, points):
+    """
+    Perform Direct Linear Transformation (DLT) for adaptive triangulation.
+    This function computes the 3D coordinates of a point given its projections
+    in multiple views using the DLT algorithm. It constructs a system of linear
+    equations from the projection matrices and the corresponding 2D points, and
+    then solves it using Singular Value Decomposition (SVD).
+    Parameters:
+    -----------
+    projections : list of numpy.ndarray
+        A list of 3x4 projection matrices for each view.
+    points : list of numpy.ndarray
+        A list of 2D points corresponding to each view. Each element in the list
+        is an array of shape (n, 2), where n is the number of points.
+    Returns:
+    --------
+    numpy.ndarray
+        A 1D array of length 3 representing the 3D coordinates of the point.
+    """
+    
+    A=[]
+    for i in range(len(projections)):
+        P=projections[i]
+        point = points[i]
+
+        for j in range (len(point)):
+            A.append(point[j][1]*P[2,:] - P[1,:])
+            A.append(P[0,:] - point[j][0]*P[2,:])
+
+    A = np.array(A).reshape((-1,4))
+    B = A.transpose() @ A
+    _, _, Vh = np.linalg.svd(B, full_matrices = False)
+
+    return Vh[3,0:3]/Vh[3,3]
+
+def triangulate_points(keypoints_list, mtxs, dists, projections):
+    """
+    Triangulates 3D points from multiple 2D keypoints using camera matrices and distortion coefficients.
+    Args:
+        keypoints_list (list of list of tuples): A list where each element is a list of 2D keypoints for a single frame.
+        mtxs (list of numpy.ndarray): A list of camera matrices for each frame.
+        dists (list of numpy.ndarray): A list of distortion coefficients for each frame.
+        projections (list of numpy.ndarray): A list of projection matrices for each frame.
+    Returns:
+        numpy.ndarray: An array of 3D points triangulated from the input 2D keypoints.
+    """
+
+    p3ds_frame=[]
+    undistorted_points = []
+
+    for ii in range(len(keypoints_list)):
+        points = keypoints_list[ii] 
+        distCoeffs_mat = np.array([dists[ii]]).reshape(-1, 1)
+        points_undistorted = cv2.undistortPoints(np.array(points).reshape(-1, 1, 2), mtxs[ii], distCoeffs_mat)
+        undistorted_points.append(points_undistorted)
+
+    for point_idx in range(26):
+        points_per_point = [undistorted_points[i][point_idx] for i in range(len(undistorted_points))]
+        _p3d = DLT(projections, points_per_point)
+        p3ds_frame.append(_p3d)
+
+    return np.array(p3ds_frame)

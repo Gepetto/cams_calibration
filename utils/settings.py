@@ -27,3 +27,7 @@ class Settings:
         {"rows": 6, "columns": 7, "square_size": 0.108}    # Large chessboard
     ])
 
+    #MMPOSE MODELS (here body 26)
+    det_model_path: str = "/root/workspace/mmdeploy/rtmpose-trt/rtmdet-nano" # absolute path
+    pose_model_path: str = "/root/workspace/mmdeploy/rtmpose-trt/rtmpose-m" # absolute path 
+
