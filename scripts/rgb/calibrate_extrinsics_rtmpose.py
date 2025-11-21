@@ -433,6 +433,10 @@ def compute_reprojection_rmse_pair(
     # We will use only the first 26 joints for triangulation
     J3d = 26
 
+    # good convention
+    R = R.T
+    t = -R @ t
+
     # Prepare camera matrices/distortions/projections in normalized space
     mtxs = [K1, K2]
     dists = [D1, D2]
@@ -547,8 +551,9 @@ def compute_reprojection_rmse_multicam(
         else:
             if cam not in extr_R or cam not in extr_T:
                 raise ValueError(f"Missing extrinsics for camera {cam}")
-            R = extr_R[cam]
-            t = np.asarray(extr_T[cam]).reshape(3)
+            # good convention
+            R = extr_R[cam].T
+            t = np.asarray(-R @ extr_T[cam]).reshape(3)
 
         Rt_by_cam[cam] = (R, t)
         mtxs.append(K)
