@@ -327,7 +327,7 @@ def extract_keypoints_from_video(
 # -------------------------------------------------------------------
 
 
-def build_correspondences(kps1, kps2, conf1, conf2, conf_thresh=0.5):
+def build_correspondences(kps1, kps2, conf1, conf2, conf_thresh=0.8):
     """
     kps*: (T, J, 2), conf*: (T, J)
     Returns:
@@ -355,7 +355,7 @@ def estimate_extrinsics_from_keypoints(
     D1,
     K2,
     D2,
-    conf_thresh=0.5,
+    conf_thresh=0.8,
 ):
     """
     Estimate (R, T) between *camera 2* and *camera 1* from RTMPose 2D keypoints.
@@ -412,7 +412,7 @@ def compute_reprojection_rmse_pair(
     D2,
     R,
     t,
-    conf_thresh=0.5,
+    conf_thresh=0.8,
 ):
     """
     Use current (R, t) to triangulate each joint (via triangulate_points)
@@ -502,7 +502,7 @@ def compute_reprojection_rmse_multicam(
     base_cam,
     extr_R,
     extr_T,
-    conf_thresh=0.5,
+    conf_thresh=0.8,
     J3d=26,
 ):
     """
@@ -626,7 +626,7 @@ def compute_reprojection_rmse_multicam(
 def calibrate_from_last_session(
     recorded_sessions,
     config_dir: str,
-    conf_thresh: float = 0.5,
+    conf_thresh: float = 0.8,
 ):
     """
     Take the *last* recorded session (multi-cam), and:
