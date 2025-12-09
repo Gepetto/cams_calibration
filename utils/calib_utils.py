@@ -2049,24 +2049,24 @@ def autocalibrate_from_human(
             verbose=True,
         )
 
-        # --- Anthropometric scale: fix metric baseline for t_opt ---
-        s_scale = estimate_scale_from_anthropometry(
-            kps_base,
-            kps_other,
-            conf_base,
-            conf_other,
-            K1_opt,
-            D1_opt,
-            K2_opt,
-            D2_opt,
-            R_opt,
-            t_opt,
-            height_m=height_m,
-            gender=gender,
-            conf_thresh=conf_thresh,
-        )
-        s_scale=1
-        t_opt = s_scale * t_opt
+        # # --- Anthropometric scale: fix metric baseline for t_opt ---
+        # s_scale = estimate_scale_from_anthropometry(
+        #     kps_base,
+        #     kps_other,
+        #     conf_base,
+        #     conf_other,
+        #     K1_opt,
+        #     D1_opt,
+        #     K2_opt,
+        #     D2_opt,
+        #     R_opt,
+        #     t_opt,
+        #     height_m=height_m,
+        #     gender=gender,
+        #     conf_thresh=conf_thresh,
+        # )
+        # s_scale=1
+        # t_opt = s_scale * t_opt
 
         # Build correspondences again (full set above threshold) and compute final RMSE
         pts1_pix, pts2_pix = build_correspondences(
