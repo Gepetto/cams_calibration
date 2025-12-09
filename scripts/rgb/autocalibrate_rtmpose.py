@@ -26,9 +26,8 @@ def main():
     config_dir = os.path.join(repo_path, "config")
 
     # 1) Record videos for calibration (multi-cam, robust)
-    # recorded_sessions = record_calibration_videos(config_dir)
-    recorded_sessions = [{"0": "/root/workspace/ros_ws/src/rt-cosmik/tests/full/data/camera_0.mp4", "2": "/root/workspace/ros_ws/src/rt-cosmik/tests/full/data/camera_2.mp4"}]  # <-- For testing, skip recording step
-
+    recorded_sessions = record_calibration_videos(config_dir)
+    # recorded_sessions = [{"0": "/root/workspace/ros_ws/src/rt-cosmik/tests/full/data/camera_0.mp4", "2": "/root/workspace/ros_ws/src/rt-cosmik/tests/full/data/camera_2.mp4"}]  # <-- For testing, skip recording step
 
     autocalibrate_from_human(
         recorded_sessions,

@@ -1027,13 +1027,15 @@ class PoseTrackerEstimator:
             for kpt, show, color in zip(kpts, show, point_color):
                 if show:
                     cv.circle(img, kpt, 1, palette[color], 2, cv.LINE_AA)
+        
+        return img
            
-        cv.imshow('pose_tracker'+str(idx), img)
-        # If 'q' is pressed, exit visualization
-        if cv.waitKey(1) & 0xFF == ord('q'):
-            return False
+        # cv.imshow('pose_tracker'+str(idx), img)
+        # # If 'q' is pressed, exit visualization
+        # if cv.waitKey(1) & 0xFF == ord('q'):
+        #     return False
 
-        return True
+        # return True
 
 def DLT(projections, points):
     """
@@ -1278,37 +1280,8 @@ def record_calibration_videos(config_dir: str):
                 frame = frames[cam_idx]
                 # RTMPose tracking + visualization (one window per cam)
                 results = pose_estimators[cam_idx].estimate(frame)
-                pose_estimators[cam_idx].visualize(frame, results, idx=cam_idx)
-
-                # Small tile for global mosaic
-                tile = cv.resize(frame, (640, 480), interpolation=cv.INTER_NEAREST)
-                cv.putText(
-                    tile,
-                    f"Cam {cam_idx}",
-                    (5, 25),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 255, 0),
-                    2,
-                    cv.LINE_AA,
-                )
-                preview_tiles.append(tile)
-
-            mosaic = build_mosaic(preview_tiles, cols=2)
-            if recording and mosaic is not None:
-                cv.putText(
-                    mosaic,
-                    f"REC #{session_id}",
-                    (10, 40),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    1.2,
-                    (0, 0, 255),
-                    3,
-                    cv.LINE_AA,
-                )
-
-            if mosaic is not None:
-                cv.imshow("RGB calib mosaic", mosaic)
+                img = pose_estimators[cam_idx].visualize(frame, results, idx=cam_idx)
+                cv.imshow('pose_tracker'+str(cam_idx), img)
 
             key = cv.waitKey(1) & 0xFF
 
@@ -2092,6 +2065,7 @@ def autocalibrate_from_human(
             gender=gender,
             conf_thresh=conf_thresh,
         )
+        s_scale=1
         t_opt = s_scale * t_opt
 
         # Build correspondences again (full set above threshold) and compute final RMSE
@@ -2120,8 +2094,8 @@ def autocalibrate_from_human(
             f"c{base_cam}_to_c{cam_idx}_params_color_rtmpose_autocalib.yaml",
         )
 
-        R_opt=R_opt.T
-        t_opt = -R_opt @ t_opt.reshape(3)
+        # R_opt=R_opt.T
+        # t_opt = -R_opt @ t_opt.reshape(3)
 
         save_cam_to_cam_params(
             K_by_cam[base_cam],   # or K1_opt
