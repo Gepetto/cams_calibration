@@ -1840,31 +1840,43 @@ def estimate_scale_from_anthropometry(
     s_pelvis = collect_segment_scale([(11, 12)], target_pelvis)
     if s_pelvis is not None:
         scales.append(s_pelvis)
+    else:
+        print("  [Anthropometry] Warning: could not compute pelvis width scale.")
 
     # L_abdomen + L_thorax_cerv : 19–18
     s_trunk = collect_segment_scale([(19, 18)], target_trunk)
     if s_trunk is not None:
         scales.append(s_trunk)
+    else:
+        print("  [Anthropometry] Warning: could not compute trunk length scale.")
 
     # L_upperarm : 6–8 (right), 5–7 (left)
     s_upperarm = collect_segment_scale([(6, 8), (5, 7)], target_upperarm)
     if s_upperarm is not None:
         scales.append(s_upperarm)
+    else:
+        print("  [Anthropometry] Warning: could not compute upper arm scale.")
 
     # L_lowerarm : 8–10 (right), 7–9 (left)
     s_lowerarm = collect_segment_scale([(8, 10), (7, 9)], target_lowerarm)
     if s_lowerarm is not None:
         scales.append(s_lowerarm)
+    else:
+        print("  [Anthropometry] Warning: could not compute lower arm scale.")
 
     # L_upperleg : 12–14 (right), 11–13 (left)
     s_upperleg = collect_segment_scale([(12, 14), (11, 13)], target_upperleg)
     if s_upperleg is not None:
         scales.append(s_upperleg)
+    else:
+        print("  [Anthropometry] Warning: could not compute upper leg scale.")
 
     # L_lowerleg : 14–16 (right), 13–15 (left)
     s_lowerleg = collect_segment_scale([(14, 16), (13, 15)], target_lowerleg)
     if s_lowerleg is not None:
         scales.append(s_lowerleg)
+    else:
+        print("  [Anthropometry] Warning: could not compute lower leg scale.")
     # ---------------------------------------------
 
     if not scales:
