@@ -1,5 +1,6 @@
 import cv2 as cv
 import yaml
+import os
 import glob
 import numpy as np
 import subprocess
@@ -1125,3 +1126,999 @@ def calculate_anthropometric_segment_lengths(height, gender):
     lengths = np.round(ratios * height, 3)  # mm accuracy
     dict_lengths = dict(zip(lengths_names, lengths))
     return dict_lengths
+
+
+# AUTOCALIBRATION WITH RTMPOSE
+
+# -------------------------------------------------------------------
+#  Helpers for video recording
+# -------------------------------------------------------------------
+
+
+def make_video_dirs(config_dir: str, camera_dict):
+    """
+    Create per-camera directories to store calibration videos.
+
+    Returns:
+        video_dirs: dict[int, str] mapping cam_index -> directory path
+    """
+    video_dirs = {}
+    for cam_idx in sorted(camera_dict.keys()):
+        cam_dir = os.path.join(config_dir, f"videos_calib_cam_{cam_idx}", "color")
+        os.makedirs(cam_dir, exist_ok=True)
+        video_dirs[cam_idx] = cam_dir
+    return video_dirs
+
+
+def build_mosaic(frames, cols=2):
+    """
+    Build a simple mosaic (grid) image from a list of frames (all same size).
+    """
+    if not frames:
+        return None
+    h, w, c = frames[0].shape
+    n = len(frames)
+    cols = min(cols, n)
+    rows = int(np.ceil(n / cols))
+
+    # Fill with black images if needed
+    padded = frames + [np.zeros_like(frames[0]) for _ in range(rows * cols - n)]
+
+    rows_imgs = []
+    for r in range(rows):
+        row = np.hstack(padded[r * cols : (r + 1) * cols])
+        rows_imgs.append(row)
+    mosaic = np.vstack(rows_imgs)
+    return mosaic
+
+
+def record_calibration_videos(config_dir: str):
+    """
+    Open all available cameras, show a live RTMPose preview, and let the user
+    toggle recording of synchronized calibration videos for *all* cameras.
+
+    Press:
+        's' -> start/stop recording a clip for all cameras
+        'q' -> quit
+
+    Returns:
+        recorded_sessions: List[Dict[int, str]]
+            Each element is a dict mapping cam_index -> video_path for one session.
+    """
+    camera_dict = list_cameras_with_v4l2()
+    if not camera_dict:
+        raise RuntimeError("No cameras detected by v4l2-ctl.")
+
+    cam_indices = sorted(camera_dict.keys())
+    print("Detected cameras:", camera_dict)
+
+    # Open captures
+    captures = []
+    for cam_idx in cam_indices:
+        cap = cv.VideoCapture(cam_idx, cv.CAP_V4L2)
+        if not cap.isOpened():
+            print(f"WARNING: could not open camera {cam_idx}")
+        else:
+            cap.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*settings.fourcc))
+            cap.set(cv.CAP_PROP_FRAME_WIDTH, settings.width)
+            cap.set(cv.CAP_PROP_FRAME_HEIGHT, settings.height)
+            cap.set(cv.CAP_PROP_FPS, settings.fs)
+        captures.append(cap)
+
+    if len(captures) < 2:
+        print("WARNING: fewer than 2 cameras detected; recording still works,"
+              " but extrinsics calibration will need at least 2.")
+    # Prepare output dirs
+    video_dirs = make_video_dirs(config_dir, camera_dict)
+    print("Calibration videos will be stored under:")
+    for cam_idx, d in video_dirs.items():
+        print(f"  cam {cam_idx}: {d}")
+
+    # Pose estimators (one per camera)
+    pose_estimators = {
+        cam_idx: PoseTrackerEstimator(
+            det_model=settings.det_model_path,
+            pose_model=settings.pose_model_path,
+        )
+        for cam_idx in cam_indices
+    }
+
+    # Recording state
+    recording = False
+    session_id = 0
+    writers = {cam_idx: None for cam_idx in cam_indices}
+    current_session_paths = None
+    recorded_sessions = []
+
+    # Writer codec (MP4)
+    mp4_fourcc = cv.VideoWriter_fourcc(*"mp4v")
+    fps = float(settings.fs)
+
+    def _find_existing_sessions(video_dirs_map, cam_ids):
+        """
+        Scan existing calib_video_*.mp4 files and rebuild complete sessions
+        (only sessions that have a file for every camera are kept).
+        """
+        sessions = {}
+        for cam_idx in cam_ids:
+            pattern = os.path.join(video_dirs_map[cam_idx], "calib_video_*.mp4")
+            for path in glob.glob(pattern):
+                base = os.path.basename(path)
+                try:
+                    sid = int(base.split("_")[-1].split(".")[0])
+                except (ValueError, IndexError):
+                    continue
+                sessions.setdefault(sid, {})[cam_idx] = path
+        complete = []
+        for sid, paths in sessions.items():
+            if set(paths.keys()) == set(cam_ids):
+                complete.append((sid, paths))
+        complete.sort(key=lambda x: x[0])
+        return [p for _, p in complete]
+
+    try:
+        while True:
+            # Grab frames
+            frames = {}
+            for cam_idx, cap in zip(cam_indices, captures):
+                if not cap.isOpened():
+                    frames[cam_idx] = None
+                    continue
+                ret, frame = cap.read()
+                frames[cam_idx] = frame if ret else None
+
+            # Require all cameras to succeed for a "synchronized" frame
+            if any(frames[cam_idx] is None for cam_idx in cam_indices):
+                # Just skip this loop if a frame is missing
+                continue
+
+            # RTMPose overlay + mosaic preview
+            preview_tiles = []
+            for cam_idx in cam_indices:
+                frame = frames[cam_idx]
+                # RTMPose tracking + visualization (one window per cam)
+                results = pose_estimators[cam_idx].estimate(frame)
+                pose_estimators[cam_idx].visualize(frame, results, idx=cam_idx)
+
+                # Small tile for global mosaic
+                tile = cv.resize(frame, (640, 480), interpolation=cv.INTER_NEAREST)
+                cv.putText(
+                    tile,
+                    f"Cam {cam_idx}",
+                    (5, 25),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 255, 0),
+                    2,
+                    cv.LINE_AA,
+                )
+                preview_tiles.append(tile)
+
+            mosaic = build_mosaic(preview_tiles, cols=2)
+            if recording and mosaic is not None:
+                cv.putText(
+                    mosaic,
+                    f"REC #{session_id}",
+                    (10, 40),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    1.2,
+                    (0, 0, 255),
+                    3,
+                    cv.LINE_AA,
+                )
+
+            if mosaic is not None:
+                cv.imshow("RGB calib mosaic", mosaic)
+
+            key = cv.waitKey(1) & 0xFF
+
+            if key == ord("s"):
+                # toggle recording
+                if not recording:
+                    # start new session
+                    recording = True
+                    current_session_paths = {}
+                    print(f"\n=== Starting recording session #{session_id} ===")
+                    # create writers for each camera
+                    for cam_idx in cam_indices:
+                        frame = frames[cam_idx]
+                        h, w, _ = frame.shape
+                        out_dir = video_dirs[cam_idx]
+                        out_path = os.path.join(
+                            out_dir, f"calib_video_{session_id:03d}.mp4"
+                        )
+                        writers[cam_idx] = cv.VideoWriter(
+                            out_path, mp4_fourcc, fps, (w, h)
+                        )
+                        current_session_paths[cam_idx] = out_path
+                        print(f"  cam {cam_idx}: {out_path}")
+                else:
+                    # stop current session
+                    print(f"=== Stopping recording session #{session_id} ===\n")
+                    recording = False
+                    for cam_idx in cam_indices:
+                        if writers[cam_idx] is not None:
+                            writers[cam_idx].release()
+                            writers[cam_idx] = None
+                    if current_session_paths is not None:
+                        recorded_sessions.append(current_session_paths)
+                        current_session_paths = None
+                    session_id += 1
+
+            if key == ord("q"):
+                print("Quitting capture loop...")
+                break
+
+            # Write frames if recording
+            if recording:
+                for cam_idx in cam_indices:
+                    if writers[cam_idx] is not None:
+                        writers[cam_idx].write(frames[cam_idx])
+
+    finally:
+        if recording:
+            for cam_idx in cam_indices:
+                if writers[cam_idx] is not None:
+                    writers[cam_idx].release()
+        for cap in captures:
+            cap.release()
+        cv.destroyAllWindows()
+
+    # If no new recordings, try to reuse existing ones on disk
+    if not recorded_sessions:
+        existing = _find_existing_sessions(video_dirs, cam_indices)
+        if existing:
+            print("\nNo new recording made; reusing existing sessions on disk.")
+            recorded_sessions.extend(existing)
+
+    print("\nRecorded sessions (including reused if found):")
+    for i, sess in enumerate(recorded_sessions):
+        print(f"  Session #{i}:")
+        for cam_idx, path in sess.items():
+            print(f"    cam {cam_idx}: {path}")
+
+    return recorded_sessions
+
+
+def extract_keypoints_from_video(
+    video_path: str,
+    det_model_path: str,
+    pose_model_path: str
+):
+    """
+    Run PoseTrackerEstimator on a video and return (keypoints, confidences).
+
+    Returns:
+        keypoints: (T, J, 2) in pixel coordinates
+        conf:      (T, J)    confidence scores
+    """
+    estimator = PoseTrackerEstimator(
+        det_model=det_model_path,
+        pose_model=pose_model_path,
+    )
+
+    cap = cv.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+
+    all_kps = []
+    all_conf = []
+    frame_idx = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_idx += 1
+
+        results = estimator.estimate(frame)
+        # According to visualize(): results = (keypoints, bboxes, ...)
+        keypoints, bboxes, _ = results
+
+        if keypoints is None or len(keypoints) == 0:
+            # no person detected
+            if all_kps:
+                J = all_kps[-1].shape[0]
+            else:
+                # can't infer J, skip this frame
+                continue
+            all_kps.append(np.full((J, 2), np.nan, dtype=np.float32))
+            all_conf.append(np.zeros((J,), dtype=np.float32))
+            continue
+
+        # Choose the person with the largest bounding box (if multiple)
+        if bboxes is not None and len(bboxes) > 1:
+            areas = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
+            person_idx = int(np.argmax(areas))
+        else:
+            person_idx = 0
+
+        kps = keypoints[person_idx]  # (J, 3): x, y, score
+        xy = kps[:, :2].astype(np.float32)
+        conf = kps[:, 2].astype(np.float32)
+
+        all_kps.append(xy)
+        all_conf.append(conf)
+
+    cap.release()
+
+    if not all_kps:
+        raise RuntimeError(f"No keypoints extracted from {video_path}")
+
+    keypoints_arr = np.stack(all_kps, axis=0)  # (T, J, 2)
+    conf_arr = np.stack(all_conf, axis=0)      # (T, J)
+    return keypoints_arr, conf_arr
+
+# -------------------------------------------------------------------
+#  Liu-style binocular auto-calibration helpers
+#  (RTMPose -> correspondences -> E -> R,t -> triangulate -> refine K)
+# -------------------------------------------------------------------
+
+# RTMPose "body26" joints we consider reliable for geometry:
+# torso + arms + legs; we drop hands, head, feet.
+RELIABLE_JOINTS_BODY26 = [
+    5, 6, 7, 8, 9, 10,      # shoulders, elbows, wrists
+    11, 12, 13, 14, 15, 16, # hips, knees, ankles
+    18, 19,                 # trunk points used for abdomen+thorax_cerv
+]
+
+def build_correspondences(
+    kps1,
+    kps2,
+    conf1,
+    conf2,
+    conf_thresh=0.5,
+    restrict_to_reliable=True,
+    return_indices=False,
+):
+    """
+    Aggregate 2D–2D correspondences across all frames/joints.
+
+    kps*:  (T, J, 2)
+    conf*: (T, J)
+
+    Args:
+        conf_thresh:          minimum confidence in both views.
+        restrict_to_reliable: if True, only use a subset of body26 joints
+                              (no head / hands / feet) to reduce noise.
+        return_indices:       if True, also return (t, j) indices for each match.
+
+    Returns:
+        pts1_pix, pts2_pix: (N, 2) pixel coordinates (float32)
+        idxs (optional):    (N, 2) int array of (t_idx, j_idx)
+    """
+    T, J, _ = kps1.shape
+    pts1 = []
+    pts2 = []
+    idxs = []
+
+    if restrict_to_reliable:
+        joint_iter = [j for j in RELIABLE_JOINTS_BODY26 if j < J]
+    else:
+        joint_iter = range(J)
+
+    for t in range(T):
+        for j in joint_iter:
+            if conf1[t, j] > conf_thresh and conf2[t, j] > conf_thresh:
+                p1 = kps1[t, j]
+                p2 = kps2[t, j]
+                if np.any(np.isnan(p1)) or np.any(np.isnan(p2)):
+                    continue
+                pts1.append(p1)
+                pts2.append(p2)
+                if return_indices:
+                    idxs.append((t, j))
+
+    if not pts1:
+        raise RuntimeError("No valid correspondences above confidence threshold.")
+
+    pts1_pix = np.asarray(pts1, dtype=np.float32)
+    pts2_pix = np.asarray(pts2, dtype=np.float32)
+
+    if return_indices:
+        idxs = np.asarray(idxs, dtype=np.int32)
+        return pts1_pix, pts2_pix, idxs
+
+    return pts1_pix, pts2_pix
+
+
+def estimate_extrinsics_epipolar(
+    kps1,
+    kps2,
+    conf1,
+    conf2,
+    K1,
+    D1,
+    K2,
+    D2,
+    conf_thresh=0.8,
+):
+    """
+    Step 1 (Sec. 4.2.1 in Liu et al.): estimate relative pose from 2D–2D
+    correspondences using essential matrix + recoverPose.
+
+    IMPORTANT: we interpret the output as the transform from cam1 to cam2:
+        X_2 = R * X_1 + t
+    in *normalized* (undistorted) coordinates.
+
+    Returns:
+        R (3,3), t (3,), pts1_pix_inliers (N,2), pts2_pix_inliers (N,2)
+    """
+    # 2D-2D correspondences in pixels
+    pts1_pix, pts2_pix = build_correspondences(kps1, kps2, conf1, conf2, conf_thresh)
+
+    # Undistort to normalized coordinates (camera coordinates, K = I)
+    pts1_norm = cv.undistortPoints(
+        pts1_pix.reshape(-1, 1, 2), K1, D1
+    ).reshape(-1, 2)
+    pts2_norm = cv.undistortPoints(
+        pts2_pix.reshape(-1, 1, 2), K2, D2
+    ).reshape(-1, 2)
+
+    # Essential matrix in normalized space (focal = 1, pp = (0,0))
+    E, mask = cv.findEssentialMat(
+        pts1_norm,
+        pts2_norm,
+        1.0,
+        (0.0, 0.0),
+        method=cv.RANSAC,
+        prob=0.999,
+        threshold=1e-3,
+    )
+    if E is None:
+        raise RuntimeError("findEssentialMat failed.")
+
+    mask = mask.ravel().astype(bool)
+    if not np.any(mask):
+        raise RuntimeError("All correspondences rejected by RANSAC.")
+
+    pts1_in = pts1_norm[mask]
+    pts2_in = pts2_norm[mask]
+
+    # recoverPose returns R, t such that x2 ~ R x1 + t (normalized camera coords)
+    _, R, t, _ = cv.recoverPose(E, pts1_in, pts2_in)
+
+    # Keep only inlier pixels as well (for later reprojection/triangulation)
+    pts1_pix_inliers = pts1_pix[mask]
+    pts2_pix_inliers = pts2_pix[mask]
+
+    return R, t.reshape(3), pts1_pix_inliers, pts2_pix_inliers
+
+
+def triangulate_correspondences(
+    K1,
+    D1,
+    K2,
+    D2,
+    R,
+    t,
+    pts1_pix,
+    pts2_pix,
+):
+    """
+    Triangulate 3D points in the *base camera (cam1) frame* from 2D–2D
+    correspondences and current extrinsics.
+
+    We:
+      - undistort -> normalized coords in each camera;
+      - use P1 = [I | 0], P2 = [R | t] in normalized space;
+      - cv2.triangulatePoints -> homogeneous -> 3D in cam1 frame.
+
+    Returns:
+        X_cam1: (N, 3)
+    """
+    if pts1_pix.shape[0] == 0:
+        return np.zeros((0, 3), dtype=np.float64)
+
+    pts1_norm = cv.undistortPoints(
+        pts1_pix.reshape(-1, 1, 2), K1, D1
+    ).reshape(-1, 2)
+    pts2_norm = cv.undistortPoints(
+        pts2_pix.reshape(-1, 1, 2), K2, D2
+    ).reshape(-1, 2)
+
+    P1 = np.hstack([np.eye(3), np.zeros((3, 1))]).astype(np.float64)  # cam1 at origin
+    P2 = np.hstack([R, t.reshape(3, 1)]).astype(np.float64)           # cam2 in cam1 frame
+
+    pts1_2xN = pts1_norm.T  # (2, N)
+    pts2_2xN = pts2_norm.T
+
+    X_h = cv.triangulatePoints(P1, P2, pts1_2xN, pts2_2xN)  # (4, N)
+    X = (X_h[:3] / X_h[3]).T  # (N, 3)
+    return X
+
+
+def optimize_intrinsics_linear_ls(K_prev, X_cam, uv_pix):
+    """
+    Linear least-squares update of intrinsics (fx, fy, cx, cy) given:
+      - 3D points in camera coordinates X_cam (N,3),
+      - observed pixel locations uv_pix (N,2).
+
+    We assume the standard pinhole model without skew:
+        u = fx * (X/Z) + cx
+        v = fy * (Y/Z) + cy
+
+    Build a linear system in theta = [fx, cx, fy, cy]^T.
+
+    Returns:
+        K_new (3,3)
+    """
+    fx0 = K_prev[0, 0]
+    fy0 = K_prev[1, 1]
+    cx0 = K_prev[0, 2]
+    cy0 = K_prev[1, 2]
+
+    A = []
+    b = []
+
+    for X, uv in zip(X_cam, uv_pix):
+        Xc, Yc, Zc = float(X[0]), float(X[1]), float(X[2])
+        if Zc <= 1e-6:
+            continue  # behind camera or invalid
+
+        u, v = float(uv[0]), float(uv[1])
+
+        # u equation: u = fx * X/Z + cx
+        A.append([Xc / Zc, 1.0, 0.0, 0.0])
+        b.append(u)
+
+        # v equation: v = fy * Y/Z + cy
+        A.append([0.0, 0.0, Yc / Zc, 1.0])
+        b.append(v)
+
+    if len(b) < 4:
+        # Not enough constraints, keep previous intrinsics
+        return K_prev
+
+    A = np.asarray(A, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+
+    theta, *_ = np.linalg.lstsq(A, b, rcond=None)
+    fx, cx, fy, cy = theta
+
+    # Small regularisation: keep intrinsics within a reasonable band around the
+    # previous ones to avoid exploding due to bad conditioning.
+    fx = float(np.clip(fx, 0.5 * fx0, 1.5 * fx0))
+    fy = float(np.clip(fy, 0.5 * fy0, 1.5 * fy0))
+    # principal point drift is usually small; allow +- 100 px around initial
+    cx = float(np.clip(cx, cx0 - 100.0, cx0 + 100.0))
+    cy = float(np.clip(cy, cy0 - 100.0, cy0 + 100.0))
+
+    K_new = K_prev.copy()
+    K_new[0, 0] = fx
+    K_new[1, 1] = fy
+    K_new[0, 2] = cx
+    K_new[1, 2] = cy
+    return K_new
+
+
+def compute_reprojection_error(
+    K1,
+    D1,
+    K2,
+    D2,
+    R,
+    t,
+    pts1_pix,
+    pts2_pix,
+):
+    """
+    Compute symmetric RMSE reprojection error for a stereo pair:
+
+      1. Triangulate 3D points in cam1 frame (normalized model).
+      2. Reproject into both cameras using K1, K2 and R, t.
+      3. Compute sqrt(mean squared error) over both cameras.
+
+    Returns:
+        rmse (float, pixels)
+    """
+    if pts1_pix.shape[0] == 0:
+        return np.nan
+
+    X_cam1 = triangulate_correspondences(K1, D1, K2, D2, R, t, pts1_pix, pts2_pix)
+
+    total_err = 0.0
+    total_count = 0
+
+    for X, p1_obs, p2_obs in zip(X_cam1, pts1_pix, pts2_pix):
+        X = np.asarray(X, dtype=np.float64)
+        Xc1 = X
+        Xc2 = R @ X + t.reshape(3)
+
+        if Xc1[2] <= 1e-6 or Xc2[2] <= 1e-6:
+            continue
+
+        # cam1 projection
+        x1_n = Xc1[:2] / Xc1[2]
+        p1_hat = (K1 @ np.array([x1_n[0], x1_n[1], 1.0], dtype=np.float64))[:2]
+
+        # cam2 projection
+        x2_n = Xc2[:2] / Xc2[2]
+        p2_hat = (K2 @ np.array([x2_n[0], x2_n[1], 1.0], dtype=np.float64))[:2]
+
+        err1 = float(np.sum((p1_hat - p1_obs) ** 2))
+        err2 = float(np.sum((p2_hat - p2_obs) ** 2))
+
+        total_err += err1 + err2
+        total_count += 2
+
+    if total_count == 0:
+        return np.nan
+
+    rmse = float(np.sqrt(total_err / total_count))
+    return rmse
+
+def estimate_scale_from_anthropometry(
+    kps1,
+    kps2,
+    conf1,
+    conf2,
+    K1,
+    D1,
+    K2,
+    D2,
+    R,
+    t,
+    height_m,
+    gender,
+    conf_thresh=0.8,
+):
+    """
+    Estimate a global metric scale for the stereo rig using anthropometric
+    constraints on a single subject.
+
+    Steps:
+      - build multi-frame 2D correspondences on reliable joints only;
+      - triangulate 3D joints in cam1 frame with current R, t, K1, K2;
+      - for each limb segment, compute the average 3D length over time;
+      - compare to target lengths from anthropometry (Dumas/De Leva);
+      - return a single scale factor s, so that:
+            L_target ~= s * L_reconstructed.
+    """
+    # 1) Anthropometric target lengths (same unit as height_m, typically meters)
+    seg_lengths = calculate_anthropometric_segment_lengths(height_m, gender)
+
+    target_pelvis    = seg_lengths["L_pelvis_width"]
+    target_trunk     = seg_lengths["L_abdomen"] + seg_lengths["L_thorax_cerv"]
+    target_upperarm  = seg_lengths["L_upperarm"]
+    target_lowerarm  = seg_lengths["L_lowerarm"]
+    target_upperleg  = seg_lengths["L_upperleg"]
+    target_lowerleg  = seg_lengths["L_lowerleg"]
+
+    # 2) Correspondences on reliable joints, keep (t, j) indices
+    pts1_pix, pts2_pix, idxs = build_correspondences(
+        kps1,
+        kps2,
+        conf1,
+        conf2,
+        conf_thresh=conf_thresh,
+        restrict_to_reliable=True,
+        return_indices=True,
+    )
+
+    # 3) Triangulate in cam1 frame
+    X_cam1 = triangulate_correspondences(K1, D1, K2, D2, R, t, pts1_pix, pts2_pix)
+    X_cam1 = np.asarray(X_cam1, dtype=np.float64)  # (N, 3)
+
+    # 4) Organize as [T, J, 3] for easy segment-length computation
+    T = kps1.shape[0]
+    J = kps1.shape[1]
+    X_by_frame_joint = np.full((T, J, 3), np.nan, dtype=np.float64)
+    for X, (t_idx, j_idx) in zip(X_cam1, idxs):
+        if 0 <= t_idx < T and 0 <= j_idx < J:
+            X_by_frame_joint[t_idx, j_idx, :] = X
+
+    def collect_segment_scale(joint_pairs, L_target):
+        """
+        For a list of (j1, j2) joint index pairs and a target length, compute
+        the average reconstructed length over time and return L_target / L_rec.
+        """
+        all_lengths = []
+        for (j1, j2) in joint_pairs:
+            if j1 >= J or j2 >= J:
+                continue
+            X1 = X_by_frame_joint[:, j1, :]  # (T, 3)
+            X2 = X_by_frame_joint[:, j2, :]
+            valid = np.isfinite(X1[:, 0]) & np.isfinite(X2[:, 0])
+            if np.count_nonzero(valid) < 5:
+                continue
+            dists = np.linalg.norm(X1[valid] - X2[valid], axis=1)
+            if dists.size > 0:
+                all_lengths.append(np.mean(dists))
+
+        if not all_lengths:
+            return None
+        L_rec = float(np.mean(all_lengths))
+        if L_rec <= 1e-6:
+            return None
+        return L_target / L_rec
+
+    scales = []
+
+    # Your mapping: -------------------------------
+    # L_pelvis_width   : 11–12
+    s_pelvis = collect_segment_scale([(11, 12)], target_pelvis)
+    if s_pelvis is not None:
+        scales.append(s_pelvis)
+
+    # L_abdomen + L_thorax_cerv : 19–18
+    s_trunk = collect_segment_scale([(19, 18)], target_trunk)
+    if s_trunk is not None:
+        scales.append(s_trunk)
+
+    # L_upperarm : 6–8 (right), 5–7 (left)
+    s_upperarm = collect_segment_scale([(6, 8), (5, 7)], target_upperarm)
+    if s_upperarm is not None:
+        scales.append(s_upperarm)
+
+    # L_lowerarm : 8–10 (right), 7–9 (left)
+    s_lowerarm = collect_segment_scale([(8, 10), (7, 9)], target_lowerarm)
+    if s_lowerarm is not None:
+        scales.append(s_lowerarm)
+
+    # L_upperleg : 12–14 (right), 11–13 (left)
+    s_upperleg = collect_segment_scale([(12, 14), (11, 13)], target_upperleg)
+    if s_upperleg is not None:
+        scales.append(s_upperleg)
+
+    # L_lowerleg : 14–16 (right), 13–15 (left)
+    s_lowerleg = collect_segment_scale([(14, 16), (13, 15)], target_lowerleg)
+    if s_lowerleg is not None:
+        scales.append(s_lowerleg)
+    # ---------------------------------------------
+
+    if not scales:
+        print("[WARN] Anthropometric scale estimation failed (no valid segments).")
+        return 1.0
+
+    scales = np.array(scales, dtype=np.float64)
+    s_global = float(np.median(scales))
+    print(f"  [Anthropometry] per-segment scales: {scales}")
+    print(f"  [Anthropometry] chosen global scale s = {s_global:.3f}")
+    return s_global
+
+
+def binocular_autocalib_from_human(
+    kps1,
+    kps2,
+    conf1,
+    conf2,
+    K1_init,
+    D1,
+    K2_init,
+    D2,
+    conf_thresh=0.8,
+    max_outer_iters=100,
+    verbose=True,
+):
+    """
+    Implement the binocular auto-calibration loop of Liu et al. (Sec. 4.2):
+
+      - start from initial intrinsics (checkerboard or factory values);
+      - estimate extrinsics from epipolar geometry (E + recoverPose);
+      - iterate:
+         * triangulate 3D joints;
+         * refine intrinsics (linear LS on fx, fy, cx, cy);
+         * re-estimate extrinsics with updated intrinsics;
+         * monitor reprojection RMSE.
+
+    Inputs:
+        kps1, kps2 : (T, J, 2) RTMPose keypoints
+        conf1, conf2 : (T, J) confidence
+        K1_init, K2_init : (3,3) intrinsics
+        D1, D2 : (distortion vectors) are used only for undistortion
+    Returns:
+        K1_opt, D1_opt, K2_opt, D2_opt, R_opt, t_opt
+    """
+
+    # Copy intrinsics so we don't mutate the originals
+    K1 = K1_init.copy()
+    K2 = K2_init.copy()
+
+    # Initial extrinsics from epipolar geometry
+    R, t, pts1_pix, pts2_pix = estimate_extrinsics_epipolar(
+        kps1, kps2, conf1, conf2, K1, D1, K2, D2, conf_thresh
+    )
+
+    rmse_prev = np.inf
+
+    for it in range(max_outer_iters):
+        if verbose:
+            print(f"\n  [Iter {it}]")
+
+        # 1) Triangulate in base camera frame with current params
+        X_cam1 = triangulate_correspondences(K1, D1, K2, D2, R, t, pts1_pix, pts2_pix)
+
+        # Filter out points behind cameras
+        Xc1 = X_cam1
+        Xc2 = (R @ X_cam1.T + t.reshape(3, 1)).T
+        valid = (Xc1[:, 2] > 1e-6) & (Xc2[:, 2] > 1e-6)
+        if not np.any(valid):
+            print("  No valid 3D points with positive depth in both views, stopping.")
+            break
+
+        Xc1 = Xc1[valid]
+        Xc2 = Xc2[valid]
+        pts1_valid = pts1_pix[valid]
+        pts2_valid = pts2_pix[valid]
+
+        # 2) Intrinsics refinement (linear LS) for each camera
+        K1 = optimize_intrinsics_linear_ls(K1, Xc1, pts1_valid)
+        K2 = optimize_intrinsics_linear_ls(K2, Xc2, pts2_valid)
+
+        # 3) Re-estimate extrinsics with updated intrinsics
+        R, t, pts1_pix, pts2_pix = estimate_extrinsics_epipolar(
+            kps1, kps2, conf1, conf2, K1, D1, K2, D2, conf_thresh
+        )
+
+        # 4) Evaluate reprojection RMSE for monitoring
+        rmse = compute_reprojection_error(K1, D1, K2, D2, R, t, pts1_pix, pts2_pix)
+        if verbose:
+            print(f"    Reprojection RMSE (pixels): {rmse:.3f}")
+
+        if np.isfinite(rmse) and abs(rmse_prev - rmse) < 1e-3:
+            if verbose:
+                print("    Converged (RMSE change below 1e-3).")
+            break
+
+        rmse_prev = rmse
+
+    # We do not change distortion in this implementation (paper ignores it).
+    return K1, D1, K2, D2, R, t
+
+
+
+def autocalibrate_from_human(
+    recorded_sessions,
+    config_dir: str,
+    conf_thresh: float = 0.8,
+    height_m: float = 1.80,
+    gender: str = "m",
+):
+
+    if not recorded_sessions:
+        print("No recorded sessions, nothing to calibrate.")
+        return
+
+    last_session = recorded_sessions[-1]  # dict[cam_idx -> video_path]
+    # keys can be "0"/"2" (str) or ints; sort numerically for robustness
+    cam_indices = sorted(last_session.keys(), key=lambda x: int(x))
+    if len(cam_indices) < 2:
+        print("Need at least 2 cameras in session to calibrate extrinsics.")
+        return
+
+    base_cam = cam_indices[0]
+    print(f"\nUsing last session, base camera = {base_cam}")
+    print("Session videos:")
+    for cam_idx, path in last_session.items():
+        print(f"  cam {cam_idx}: {path}")
+
+    # 1) Load intrinsics
+    K_by_cam = {}
+    D_by_cam = {}
+    cam_params_dir = os.path.join(config_dir, "cam_params")
+
+    for cam_idx in cam_indices:
+        intr_path = os.path.join(cam_params_dir, f"c{cam_idx}_params_color.yaml")
+        if not os.path.exists(intr_path):
+            raise FileNotFoundError(
+                f"Missing intrinsics for cam {cam_idx}: {intr_path}"
+            )
+        Ki, Di = load_cam_params(intr_path)
+        K_by_cam[cam_idx] = Ki
+        D_by_cam[cam_idx] = Di
+
+    # 2) Extract RTMPose keypoints for all cameras
+    kps_by_cam = {}
+    conf_by_cam = {}
+
+    print("\nExtracting RTMPose keypoints for all cameras...")
+    for cam_idx in cam_indices:
+        video_path = last_session[cam_idx]
+        print(f"  cam {cam_idx}: {video_path}")
+        kps, conf = extract_keypoints_from_video(
+            video_path,
+            det_model_path=settings.det_model_path,
+            pose_model_path=settings.pose_model_path,
+        )
+        kps_by_cam[cam_idx] = kps
+        conf_by_cam[cam_idx] = conf
+
+    # 3) Align all cameras to same number of frames (truncate to minimum T)
+    T_min = min(arr.shape[0] for arr in kps_by_cam.values())
+    for cam_idx in cam_indices:
+        kps_by_cam[cam_idx] = kps_by_cam[cam_idx][:T_min]
+        conf_by_cam[cam_idx] = conf_by_cam[cam_idx][:T_min]
+
+    # 4) Binocular auto-calibration base_cam -> other cams (Liu-style)
+    kps_base = kps_by_cam[base_cam]
+    conf_base = conf_by_cam[base_cam]
+
+
+    for cam_idx in cam_indices:
+        if cam_idx == base_cam:
+            continue
+
+        print(f"\n=== Auto-calibrating base={base_cam} vs cam={cam_idx} from human ===")
+
+        kps_other = kps_by_cam[cam_idx]
+        conf_other = conf_by_cam[cam_idx]
+
+        K1_init = K_by_cam[base_cam]
+        D1 = D_by_cam[base_cam]
+        K2_init = K_by_cam[cam_idx]
+        D2 = D_by_cam[cam_idx]
+
+        # Run Liu-style binocular auto-calibration
+        K1_opt, D1_opt, K2_opt, D2_opt, R_opt, t_opt = binocular_autocalib_from_human(
+            kps_base,
+            kps_other,
+            conf_base,
+            conf_other,
+            K1_init,
+            D1,
+            K2_init,
+            D2,
+            conf_thresh=conf_thresh,
+            max_outer_iters=100,
+            verbose=True,
+        )
+
+        # --- Anthropometric scale: fix metric baseline for t_opt ---
+        s_scale = estimate_scale_from_anthropometry(
+            kps_base,
+            kps_other,
+            conf_base,
+            conf_other,
+            K1_opt,
+            D1_opt,
+            K2_opt,
+            D2_opt,
+            R_opt,
+            t_opt,
+            height_m=height_m,
+            gender=gender,
+            conf_thresh=conf_thresh,
+        )
+        t_opt = s_scale * t_opt
+
+        # Build correspondences again (full set above threshold) and compute final RMSE
+        pts1_pix, pts2_pix = build_correspondences(
+            kps_base, kps_other, conf_base, conf_other, conf_thresh
+        )
+        rmse_final = compute_reprojection_error(
+            K1_opt, D1_opt, K2_opt, D2_opt, R_opt, t_opt, pts1_pix, pts2_pix
+        )
+        print(
+            f"  Final pairwise RMSE (base={base_cam}, cam={cam_idx}) "
+            f"with auto-calibrated extrinsics: {rmse_final:.3f} px"
+        )
+
+        # At this stage, you have two options:
+        #   - keep the original intrinsics from checkerboard and only trust R_opt, t_opt;
+        #   - or trust the refined intrinsics too.
+        #
+        # For safety / compatibility with the rest of your pipeline, we
+        # *save* only R_opt, t_opt while keeping the original intrinsics
+        # in the YAML. If you want fully Liu-style auto-calibration,
+        # replace K_by_cam[...] by K1_opt / K2_opt below.
+
+        out_path = os.path.join(
+            cam_params_dir,
+            f"c{base_cam}_to_c{cam_idx}_params_color_rtmpose_autocalib.yaml",
+        )
+
+        R_opt=R_opt.T
+        t_opt = -R_opt @ t_opt.reshape(3)
+
+        save_cam_to_cam_params(
+            K_by_cam[base_cam],   # or K1_opt
+            D_by_cam[base_cam],   # or D1_opt
+            K_by_cam[cam_idx],    # or K2_opt
+            D_by_cam[cam_idx],    # or D2_opt
+            R_opt,
+            t_opt.reshape(3, 1),
+            rmse_final,
+            out_path,
+        )
+        print(f"  Saved auto-calibrated extrinsics to: {out_path}")
