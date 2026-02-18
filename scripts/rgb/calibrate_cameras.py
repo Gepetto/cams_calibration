@@ -33,15 +33,15 @@ for idx, cap in enumerate(captures):
 
 
 # Use os.makedirs() to create your directory; exist_ok=True means it won't throw an error if the directory already exists
-os.makedirs(os.path.join(repo_path,"images_calib_cam_1","color"), exist_ok=True)
+os.makedirs(os.path.join(repo_path,"images_calib_cam_0","color"), exist_ok=True)
 os.makedirs(os.path.join(repo_path,"images_calib_cam_2","color"), exist_ok=True)
 
 # Define paths 
-c1_color_imgs_dir = os.path.join(repo_path, "images_calib_cam_1", "color")
+c1_color_imgs_dir = os.path.join(repo_path, "images_calib_cam_0", "color")
 c2_color_imgs_dir = os.path.join(repo_path, "images_calib_cam_2", "color")
-c1_color_params_path = os.path.join(repo_path, "config","cam_params","c1_params_color.yaml")
+c1_color_params_path = os.path.join(repo_path, "config","cam_params","c0_params_color.yaml")
 c2_color_params_path = os.path.join(repo_path, "config","cam_params","c2_params_color.yaml")
-c1_to_c2_color_params_path = os.path.join(repo_path, "config","cam_params","c1_to_c2_params_color.yaml")
+c1_to_c2_color_params_path = os.path.join(repo_path, "config","cam_params","c0_to_c2_params_color.yaml")
 
 img_idx = 0
 try:
