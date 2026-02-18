@@ -21,7 +21,7 @@ settings = Settings()
 
 import cv2
 import numpy as np
-from utils.calib_utils import load_cam_params, save_pose_matrix_to_yaml, get_aruco_pose, get_relative_pose_world_in_cam, list_cameras_with_v4l2
+from utils.calib_utils import load_cam_params, save_pose_matrix_to_yaml, get_aruco_pose, get_relative_pose_world_in_cam, list_cameras_with_v4l2, get_relative_pose_robot_in_cam
 
 ### Initialize cams stream
 camera_dict = list_cameras_with_v4l2()
@@ -138,13 +138,19 @@ finally :
 
 cam_T1_world, cam_R1_world = get_relative_pose_robot_in_cam(os.path.join(c1_color_imgs_dir, "*.png"),K1,D1,detector, marker_size)
 
+world_R1_cam = cam_R1_world.T
+world_T1_cam = -world_R1_cam @ cam_T1_world
+
 # Save the rotation matrix and translation vector to a YAML file for Camera 1
-save_pose_matrix_to_yaml(cam_R1_world, cam_T1_world, c1_color_params_path)
+save_pose_matrix_to_yaml(world_R1_cam, world_T1_cam, c1_color_params_path)
 
 cam_T2_world, cam_R2_world = get_relative_pose_robot_in_cam(os.path.join(c2_color_imgs_dir, "*.png"),K2,D2,detector, marker_size)
 
+world_R2_cam = cam_R2_world.T
+world_T2_cam = -world_R2_cam @ cam_T2_world
+
 # Save the rotation matrix and translation vector to a YAML file for Camera 2
-save_pose_matrix_to_yaml(cam_R2_world, cam_T2_world, c2_color_params_path)
+save_pose_matrix_to_yaml(world_R2_cam, world_T2_cam, c2_color_params_path)
 
 # Camera transformations 
 camera_data = [
