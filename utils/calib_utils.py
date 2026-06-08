@@ -621,6 +621,9 @@ def get_camera_pose(frame, camera_matrix, dist_coeffs, detector, marker_size):
 
 # Function to save the rotation matrix and translation vector to a YAML file
 def save_pose_matrix_to_yaml(rotation_matrix, translation_vector, filename):
+    rotation_matrix=rotation_matrix.T
+    translation_vector=-rotation_matrix@translation_vector
+
     # Prepare the data to be saved in YAML format
     data = {
         'rotation_matrix': {
@@ -700,3 +703,71 @@ def get_cameras_params(K1, D1, K2, D2, R, T):
         dists.append(dict_cam[cam]["dist"])
         mtxs.append(dict_cam[cam]["mtx"])
     return mtxs, dists, projections, rotations, translations
+
+def load_transformation(file_path):
+    """
+    Loads the transformation parameters (R, d, s, rms) from a text file.
+
+    Parameters:
+    file_path: str
+        Path to the file from which the transformation parameters will be read.
+
+    Returns:
+    R: ndarray
+        Rotation matrix (3x3)
+    d: ndarray
+        Translation vector (3,)
+    s: float
+        Scale factor
+    rms: float
+        Root mean square fit error
+    """
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+        R_start = lines.index("Rotation Matrix (R):\n") + 1
+        R = np.loadtxt(lines[R_start:R_start + 3])
+        d_start = lines.index("Translation Vector (d):\n") + 1
+        d = np.loadtxt(lines[d_start:d_start + 1]).flatten()
+        s_line = next(line for line in lines if line.startswith("Scale Factor (s):"))
+        s = float(s_line.split(":")[1].strip())
+        rms_line = next(line for line in lines if line.startswith("RMS Error:"))
+        rms = float(rms_line.split(":")[1].strip())
+    return R, d, s, rms
+
+
+def save_cam_to_cam_params(mtx1, dist1, mtx2, dist2, R, T, rmse, path):
+    """
+    Save stereo camera calibration parameters to a file.
+    Args:
+        mtx1 (numpy.ndarray): Camera matrix for the first camera.
+        dist1 (numpy.ndarray): Distortion coefficients for the first camera.
+        mtx2 (numpy.ndarray): Camera matrix for the second camera.
+        dist2 (numpy.ndarray): Distortion coefficients for the second camera.
+        R (numpy.ndarray): Rotation matrix between the two cameras.
+        T (numpy.ndarray): Translation vector between the two cameras.
+        rmse (float): Root Mean Square Error of the calibration.
+        path (str): Path to the file where the parameters will be saved.
+    Returns:
+        None
+    """
+    cv_file = cv.FileStorage(path, cv.FILE_STORAGE_WRITE)
+    cv_file.write('K1', mtx1)
+    cv_file.write('D1', dist1)
+    cv_file.write('K2', mtx2)
+    cv_file.write('D2', dist2)
+    cv_file.write('R', R)
+    cv_file.write('T', T)
+    cv_file.write('rmse', rmse)
+    # note you *release* you don't close() a FileStorage object
+    cv_file.release()
+
+def transform_to_local_frame(D, origin, rotation_matrix):
+    # Compute D relative to B
+    D_relative = D - origin
+    
+    # Transform D to the local frame
+    D_local = rotation_matrix.T @ D_relative
+    
+    return D_local
+
+    
