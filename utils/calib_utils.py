@@ -34,17 +34,12 @@ def calibrate_camera(images_folder):
     # # LITTLE CHECKERBOARD
     # rows = 7 #number of checkerboard rows.
     # columns = 10 #number of checkerboard columns.
-    # world_scaling = 0.025 #change this to the real world square size. Or not.
+    # world_scaling = 0.025 #change this to the real world square size.
 
-    # # BIGGER CHECKERBOARD AT LAAS
+    # # BIGGER CHECKERBOARD
     # rows = 6 #number of checkerboard rows.
     # columns = 7 #number of checkerboard columns.
     # world_scaling = 0.108 #change this to the real world square size.
-
-    # # BIGGER CHECKERBOARD AT NUS RLS
-    # rows = 5 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.107 #change this to the real world square size.
     
     rows = settings.checkerboard_rows
     columns = settings.checkerboard_columns
@@ -275,7 +270,7 @@ def load_cam_params(path):
     # FILE_STORAGE_READ
     cv_file = cv.FileStorage(path, cv.FILE_STORAGE_READ)
 
-    # note we also have to specify the type to retrieve other wise we only get a
+    # note we also have to specify the type to retrieve otherwise we only get a
     # FileNode object back instead of a matrix
     camera_matrix = cv_file.getNode('K').mat()
     dist_matrix = cv_file.getNode('D').mat()
@@ -300,7 +295,7 @@ def load_cam_to_cam_params(path):
     # FILE_STORAGE_READ
     cv_file = cv.FileStorage(path, cv.FILE_STORAGE_READ)
 
-    # note we also have to specify the type to retrieve other wise we only get a
+    # note we also have to specify the type to retrieve otherwise we only get a
     # FileNode object back instead of a matrix
     R = cv_file.getNode('R').mat()
     T = cv_file.getNode('T').mat()
