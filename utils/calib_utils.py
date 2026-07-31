@@ -4,6 +4,8 @@ import glob
 import numpy as np
 import subprocess
 from utils.settings import Settings
+import os
+import glob
 
 settings = Settings()
 
@@ -32,17 +34,12 @@ def calibrate_camera(images_folder):
     # # LITTLE CHECKERBOARD
     # rows = 7 #number of checkerboard rows.
     # columns = 10 #number of checkerboard columns.
-    # world_scaling = 0.025 #change this to the real world square size. Or not.
+    # world_scaling = 0.025 #change this to the real world square size.
 
-    # # BIGGER CHECKERBOARD AT LAAS
+    # # BIGGER CHECKERBOARD
     # rows = 6 #number of checkerboard rows.
     # columns = 7 #number of checkerboard columns.
     # world_scaling = 0.108 #change this to the real world square size.
-
-    # # BIGGER CHECKERBOARD AT NUS RLS
-    # rows = 5 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.107 #change this to the real world square size.
     
     rows = settings.checkerboard_rows
     columns = settings.checkerboard_columns
@@ -118,21 +115,8 @@ def is_order_consistent(corners1, corners2):
 def stereo_calibrate(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2):
     """
     Perform stereo calibration using images from two cameras.
-    Args:
-        mtx1 (numpy.ndarray): Camera matrix for the first camera.
-        dist1 (numpy.ndarray): Distortion coefficients for the first camera.
-        mtx2 (numpy.ndarray): Camera matrix for the second camera.
-        dist2 (numpy.ndarray): Distortion coefficients for the second camera.
-        frames_folder_1 (str): Path to the folder containing images from the first camera.
-        frames_folder_2 (str): Path to the folder containing images from the second camera.
-    Returns:
-        tuple: A tuple containing:
-            - ret (float): The overall RMS re-projection error.
-            - R (numpy.ndarray): The rotation matrix between the coordinate systems of the first and second cameras.
-            - T (numpy.ndarray): The translation vector between the coordinate systems of the first and second cameras.
     """
 
-    #read the synched frames
     c1_images_names = sorted(glob.glob(frames_folder_1))
     c2_images_names = sorted(glob.glob(frames_folder_2))
 
@@ -141,75 +125,78 @@ def stereo_calibrate(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2)
     for im1, im2 in zip(c1_images_names, c2_images_names):
         _im = cv.imread(im1, 1)
         c1_images.append(_im)
- 
+
         _im = cv.imread(im2, 1)
         c2_images.append(_im)
- 
-    #change this if stereo calibration not good.
+
     criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
-    
-    # # LITTLE CHECKERBOARD
-    # rows = 7 #number of checkerboard rows.
-    # columns = 10 #number of checkerboard columns.
-    # world_scaling = 0.025 #change this to the real world square size. Or not.
-
-    # # BIGGER CHECKERBOARD AT LAAS
-    # rows = 6 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.108 #change this to the real world square size.
-
-    # BIGGER CHECKERBOARD AT NUS RLS
-    # rows = 5 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.107 #change this to the real world square size.
 
     rows = settings.checkerboard_rows
     columns = settings.checkerboard_columns
     world_scaling = settings.checkerboard_scaling
 
-    #coordinates of squares in the checkerboard world space
-    objp = np.zeros((rows*columns,3), np.float32)
-    objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
-    objp = world_scaling* objp
- 
-    #frame dimensions. Frames should be the same size.
+    objp = np.zeros((rows * columns, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:rows, 0:columns].T.reshape(-1, 2)
+    objp = world_scaling * objp
+
     width = c1_images[0].shape[1]
     height = c1_images[0].shape[0]
- 
-    #Pixel coordinates of checkerboards
-    imgpoints_left = [] # 2d points in image plane.
+
+    imgpoints_left = []
     imgpoints_right = []
- 
-    #coordinates of the checkerboard in checkerboard world space.
-    objpoints = [] # 3d point in real world space
- 
+    objpoints = []
+
+    window_names = ['img', 'img2']
+    for name in window_names:
+        cv.namedWindow(name, cv.WINDOW_NORMAL)
+
     for frame1, frame2 in zip(c1_images, c2_images):
         gray1 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
         gray2 = cv.cvtColor(frame2, cv.COLOR_BGR2GRAY)
         c_ret1, corners1 = cv.findChessboardCorners(gray1, (rows, columns), None)
         c_ret2, corners2 = cv.findChessboardCorners(gray2, (rows, columns), None)
- 
+
         if c_ret1 == True and c_ret2 == True:
             corners1 = cv.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), criteria)
             corners2 = cv.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), criteria)
 
             if is_order_consistent(corners1, corners2):
- 
+
                 cv.drawChessboardCorners(frame1, (rows, columns), corners1, c_ret1)
                 cv.imshow('img', frame1)
 
                 cv.drawChessboardCorners(frame2, (rows, columns), corners2, c_ret2)
                 cv.imshow('img2', frame2)
-                k = cv.waitKey(0)
+
+                # Wait for a keypress, OR for either window to be closed via the
+                # close (X) icon. waitKey(0) alone blocks forever on a closed
+                # window since closing doesn't generate a keypress. Either event
+                # just advances to the next image pair, same as any keypress did.
+                while True:
+                    k = cv.waitKey(30)
+                    if k != -1:
+                        break
+                    if any(cv.getWindowProperty(name, cv.WND_PROP_VISIBLE) < 1 for name in window_names):
+                        # Re-create any closed window so imshow works again next iteration.
+                        for name in window_names:
+                            if cv.getWindowProperty(name, cv.WND_PROP_VISIBLE) < 1:
+                                cv.namedWindow(name, cv.WINDOW_NORMAL)
+                        break
 
                 objpoints.append(objp)
                 imgpoints_left.append(corners1)
                 imgpoints_right.append(corners2)
 
-    stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
-    ret, CM1, dist1, CM2, dist2, R, T, E, F = cv.stereoCalibrate(objpoints, imgpoints_left, imgpoints_right, mtx1, dist1,
-                                                                 mtx2, dist2, (width, height), criteria = criteria, flags = stereocalibration_flags)
     cv.destroyAllWindows()
+
+    if len(objpoints) == 0:
+        raise RuntimeError("No valid checkerboard pairs found for stereo calibration.")
+
+    stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
+    ret, CM1, dist1, CM2, dist2, R, T, E, F = cv.stereoCalibrate(
+        objpoints, imgpoints_left, imgpoints_right, mtx1, dist1,
+        mtx2, dist2, (width, height), criteria=criteria, flags=stereocalibration_flags
+    )
     return ret, R, T
 
 def save_cam_params(mtx, dist, reproj, path):
@@ -230,23 +217,25 @@ def save_cam_params(mtx, dist, reproj, path):
     # note you *release* you don't close() a FileStorage object
     cv_file.release()
 
-def load_cam_pose(filename):
+def load_camera_extrinsics(filename):
     """
-        Load the rotation matrix and translation vector from a YAML file.
-        Args:
+        Load the rotation matrix (3x3) and translation matrix (3x1) from a YAML file.
+        Parameters:
             filename (str): The path to the YAML file.
         Returns:
             rotation_matrix (np.ndarray): The 3x3 rotation matrix.
-            translation_vector (np.ndarray): The 3x1 translation vector.
+            translation_matrix (np.ndarray): The 3x1 translation matrix.
     """
-
     with open(filename, 'r') as file:
         data = yaml.safe_load(file)
 
-    rotation_matrix = np.array(data['rotation_matrix']['data']).reshape((3, 3))
-    translation_vector = np.array(data['translation_vector']['data']).reshape((3, 1))
-    
-    return rotation_matrix, translation_vector
+    extrinsics = data['camera_extrinsics']
+
+    rotation_matrix = np.array(extrinsics['rotation_matrix']).reshape((3, 3))
+    translation_matrix = np.array(extrinsics['translation_vector']).reshape((3, 1))
+
+    return rotation_matrix, translation_matrix
+
 
 def load_cam_pose_rpy(filename):
     """
@@ -281,39 +270,13 @@ def load_cam_params(path):
     # FILE_STORAGE_READ
     cv_file = cv.FileStorage(path, cv.FILE_STORAGE_READ)
 
-    # note we also have to specify the type to retrieve other wise we only get a
+    # note we also have to specify the type to retrieve otherwise we only get a
     # FileNode object back instead of a matrix
     camera_matrix = cv_file.getNode('K').mat()
     dist_matrix = cv_file.getNode('D').mat()
 
     cv_file.release()
     return camera_matrix, dist_matrix
-
-def save_cam_to_cam_params(mtx1, dist1, mtx2, dist2, R, T, rmse, path):
-    """
-    Save stereo camera calibration parameters to a file.
-    Args:
-        mtx1 (numpy.ndarray): Camera matrix for the first camera.
-        dist1 (numpy.ndarray): Distortion coefficients for the first camera.
-        mtx2 (numpy.ndarray): Camera matrix for the second camera.
-        dist2 (numpy.ndarray): Distortion coefficients for the second camera.
-        R (numpy.ndarray): Rotation matrix between the two cameras.
-        T (numpy.ndarray): Translation vector between the two cameras.
-        rmse (float): Root Mean Square Error of the calibration.
-        path (str): Path to the file where the parameters will be saved.
-    Returns:
-        None
-    """
-    cv_file = cv.FileStorage(path, cv.FILE_STORAGE_WRITE)
-    cv_file.write('K1', mtx1)
-    cv_file.write('D1', dist1)
-    cv_file.write('K2', mtx2)
-    cv_file.write('D2', dist2)
-    cv_file.write('R', R)
-    cv_file.write('T', T)
-    cv_file.write('rmse', rmse)
-    # note you *release* you don't close() a FileStorage object
-    cv_file.release()
 
 def load_cam_to_cam_params(path):
     """
@@ -332,7 +295,7 @@ def load_cam_to_cam_params(path):
     # FILE_STORAGE_READ
     cv_file = cv.FileStorage(path, cv.FILE_STORAGE_READ)
 
-    # note we also have to specify the type to retrieve other wise we only get a
+    # note we also have to specify the type to retrieve otherwise we only get a
     # FileNode object back instead of a matrix
     R = cv_file.getNode('R').mat()
     T = cv_file.getNode('T').mat()
@@ -586,60 +549,39 @@ def save_pose_rpy_to_yaml(translation_vector, rotation_sequence, filename):
     with open(filename, 'w') as file:
         yaml.dump(data, file, default_flow_style=False)  # Use block style for readability
 
-# Function to detect the ArUco marker and estimate the camera pose
-def get_camera_pose(frame, camera_matrix, dist_coeffs, detector, marker_size):
-    # Convert the frame to grayscale
-    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-    marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
-                              [marker_size / 2, marker_size / 2, 0],
-                              [marker_size / 2, -marker_size / 2, 0],
-                              [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-    
-    # Detect the markers in the image
-    corners, ids, _ = detector.detectMarkers(gray)
-    
-    if ids is not None and len(corners) > 0:
-        # Extract the corners of the first detected marker for pose estimation
-        # Reshape the first marker's corners for solvePnP
-        corners_for_solvePnP = corners[0].reshape(-1, 2)
-        
-        # Estimate the pose of each marker
-        _, R, t = cv.solvePnP(marker_points, corners_for_solvePnP, camera_matrix, dist_coeffs, False, cv.SOLVEPNP_IPPE_SQUARE)
-
-        # Convert the rotation vector to a rotation matrix
-        rotation_matrix, _ = cv.Rodrigues(R)
-        
-        # Now we can form the transformation matrix
-        transformation_matrix = np.eye(4)
-        transformation_matrix[:3, :3] = rotation_matrix
-        transformation_matrix[:3, 3] = t.flatten()
-        
-        return transformation_matrix, corners[0], R, t
-    else:
-        return None, None, None, None
 
 # Function to save the rotation matrix and translation vector to a YAML file
-def save_pose_matrix_to_yaml(rotation_matrix, translation_vector, filename):
-    # Prepare the data to be saved in YAML format
+def save_pose_to_yaml(rotation_matrix, translation_vector, filename,
+                       frame_from, frame_to="world",
+                       scale_factor=1.0, rms_error=0.0, source_file="soder.txt"):
+    """
+    Save the rotation matrix (3x3) and translation vector (3,) or (3,1)
+    to a YAML file in the current camera_extrinsics format.
+
+    Parameters:
+        rotation_matrix (np.ndarray): The 3x3 rotation matrix.
+        translation_vector (np.ndarray): The translation vector.
+        filename (str): Path to the YAML file to write.
+        frame_from (str): Name of the source frame (e.g. "camera_0").
+        frame_to (str): Name of the target frame (default "world").
+        scale_factor (float): Scale factor, default 1.0.
+        rms_error (float): RMS calibration error, default 0.0.
+        source_file (str): Reference to the originating calibration file.
+    """
     data = {
-        'rotation_matrix': {
-            'rows': 3,
-            'cols': 3,
-            'dt': 'd',
-            'data': rotation_matrix.flatten().tolist()
-        },
-        'translation_vector': {
-            'rows': 3,
-            'cols': 1,
-            'dt': 'd',
-            'data': translation_vector.flatten().tolist()
+        "camera_extrinsics": {
+            "frame_from": frame_from,
+            "frame_to": frame_to,
+            "rotation_matrix": np.asarray(rotation_matrix).reshape(3, 3).tolist(),
+            "translation_vector": np.asarray(translation_vector).reshape(3).tolist(),
+            "scale_factor": float(scale_factor),
+            "rms_error": float(rms_error),
+            "source_file": source_file,
         }
     }
-    
-    # Write to the YAML file
-    with open(filename, 'w') as file:
-        yaml.dump(data, file)
+
+    with open(filename, "w") as file:
+        yaml.dump(data, file, default_flow_style=None, sort_keys=False)
 
 def list_cameras_with_v4l2():
     """
@@ -700,3 +642,148 @@ def get_cameras_params(K1, D1, K2, D2, R, T):
         dists.append(dict_cam[cam]["dist"])
         mtxs.append(dict_cam[cam]["mtx"])
     return mtxs, dists, projections, rotations, translations
+
+def load_transformation(file_path):
+    """
+    Loads the transformation parameters (R, d, s, rms) from a text file.
+
+    Parameters:
+    file_path: str
+        Path to the file from which the transformation parameters will be read.
+
+    Returns:
+    R: ndarray
+        Rotation matrix (3x3)
+    d: ndarray
+        Translation vector (3,)
+    s: float
+        Scale factor
+    rms: float
+        Root mean square fit error
+    """
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+        R_start = lines.index("Rotation Matrix (R):\n") + 1
+        R = np.loadtxt(lines[R_start:R_start + 3])
+        d_start = lines.index("Translation Vector (d):\n") + 1
+        d = np.loadtxt(lines[d_start:d_start + 1]).flatten()
+        s_line = next(line for line in lines if line.startswith("Scale Factor (s):"))
+        s = float(s_line.split(":")[1].strip())
+        rms_line = next(line for line in lines if line.startswith("RMS Error:"))
+        rms = float(rms_line.split(":")[1].strip())
+    return R, d, s, rms
+
+
+def save_cam_to_cam_params(mtx0, dist0, mtx2, dist2, R, T, rmse, path):
+    """
+    Save stereo camera calibration parameters to a file.
+    Args:
+        mtx0 (numpy.ndarray): Camera matrix for the first camera.
+        dist0 (numpy.ndarray): Distortion coefficients for the first camera.
+        mtx2 (numpy.ndarray): Camera matrix for the second camera.
+        dist2 (numpy.ndarray): Distortion coefficients for the second camera.
+        R (numpy.ndarray): Rotation matrix between the two cameras.
+        T (numpy.ndarray): Translation vector between the two cameras.
+        rmse (float): Root Mean Square Error of the calibration.
+        path (str): Path to the file where the parameters will be saved.
+    Returns:
+        None
+    """
+    cv_file = cv.FileStorage(path, cv.FILE_STORAGE_WRITE)
+    cv_file.write('K0', mtx0)
+    cv_file.write('D0', dist0)
+    cv_file.write('K2', mtx2)
+    cv_file.write('D2', dist2)
+    cv_file.write('R', R)
+    cv_file.write('T', T)
+    cv_file.write('rmse', rmse)
+    # note you *release* you don't close() a FileStorage object
+    cv_file.release()
+
+def transform_to_local_frame(D, origin, rotation_matrix):
+    # Compute D relative to B
+    D_relative = D - origin
+    
+    # Transform D to the local frame
+    D_local = rotation_matrix.T @ D_relative
+    
+    return D_local
+
+def compose_via_world(R_a_to_w, d_a_to_w, R_b_to_w, d_b_to_w):
+    """
+    Given two cameras' poses relative to world (a->world, b->world),
+    compute a->b directly.
+    """
+    R_w_to_b = R_b_to_w.T
+    d_w_to_b = -R_w_to_b @ d_b_to_w
+
+    R_a_to_b = R_w_to_b @ R_a_to_w
+    d_a_to_b = R_w_to_b @ d_a_to_w + d_w_to_b
+    return R_a_to_b, d_a_to_b
+
+    # --- Path helpers, shared by calibrate_cameras.py and set_world_frame.py ---
+
+def camera_ids_for(num_cameras):
+    """Camera indices follow the c0, c2, c4, c6 naming convention."""
+    if num_cameras not in (2, 4):
+        raise ValueError("num_cameras must be 2 or 4.")
+    return [i * 2 for i in range(num_cameras)]
+
+
+def intrinsics_path(cam_params_dir, cam_id):
+    return os.path.join(cam_params_dir, f"camera_{cam_id}_intrinsics.yaml")
+
+
+def extrinsics_path(cam_params_dir, cam_id):
+    return os.path.join(cam_params_dir, f"camera_{cam_id}_extrinsics.yaml")
+
+
+def cam_to_cam_path(cam_params_dir, cam_a, cam_b):
+    return os.path.join(cam_params_dir, f"camera_{cam_a}_to_camera_{cam_b}.yaml")
+
+
+def calib_images_dir(repo_path, cam_id):
+    """Image folder used by calibrate_cameras.py (checkerboard intrinsics/extrinsics)."""
+    return os.path.join(repo_path, f"images_calib_cam_{cam_id}", "color")
+
+
+def world_images_dir(repo_path, cam_id):
+    """Image folder used by set_world_frame.py (ArUco-wand world frame).
+    Preserves legacy naming (images_world_cam_1 for cam 0, images_world_cam_2
+    for cam 2), extends numerically for cam4/cam6."""
+    legacy_names = {0: "images_world_cam_1", 2: "images_world_cam_2"}
+    name = legacy_names.get(cam_id, f"images_world_cam_{cam_id}")
+    return os.path.join(repo_path, name, "color")
+
+
+def has_images(img_dir, pattern="*.png"):
+    if not os.path.isdir(img_dir):
+        return False
+    return len(glob.glob(os.path.join(img_dir, pattern))) > 0
+
+
+# --- Soder world-frame generation, shared by calibrate_cameras.py (--soder mode) ---
+
+def run_soder_world_frame(cam_ids, cam_params_dir):
+    """Compute camera_N_extrinsics.yaml from soder{N}.txt for every camera.
+    Skips any camera whose soder file is missing, with a warning.
+    Returns the list of camera IDs that got a world pose written."""
+    world_pose_cam_ids = []
+    for cam_id in cam_ids:
+        soder_path = os.path.join(cam_params_dir, f"soder{cam_id}.txt")
+        if not os.path.isfile(soder_path):
+            print(f"[SKIP] camera_{cam_id}: no soder{cam_id}.txt found at {soder_path}")
+            continue
+
+        R, d, s, rms = load_transformation(soder_path)
+        out_path = extrinsics_path(cam_params_dir, cam_id)
+
+        save_pose_to_yaml(
+            R, d, out_path,
+            frame_from=f"camera_{cam_id}", frame_to="world",
+            scale_factor=s, rms_error=rms, source_file=f"soder{cam_id}.txt",
+        )
+        print(f"[SODER] Saved {out_path}  (rms={rms:.6f}, scale={s:.6f})")
+        world_pose_cam_ids.append(cam_id)
+
+    return world_pose_cam_ids@@ffff
