@@ -1,9 +1,9 @@
 **/__pycache__/
-images_calib_cam_2/
-images_calib_cam_0/
-images_robot_base_cam_0/
-images_robot_base_cam_2/
-images_world_cam_0/
-images_world_cam_2/
-images_human_base_cam_0/
-images_human_base_cam_2/
+
+# Working capture directories, written by the scripts at the repository root.
+# Anchored with a leading slash so they do not also swallow the fixtures the
+# tests keep under tests/data/.
+/images_calib_cam_*/
+/images_world_cam_*/
+/images_robot_base_cam_*/
+/images_human_base_cam_*/
