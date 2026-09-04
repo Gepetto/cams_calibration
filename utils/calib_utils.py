@@ -1,100 +1,100 @@
 import cv2 as cv
 import yaml
 import glob
+import os
+import shutil
 import numpy as np
 import subprocess
 from utils.settings import Settings
 
 settings = Settings()
 
-def calibrate_camera(images_folder):
-    """
-    Calibrates the camera using images of a checkerboard pattern.
-    Args:
-        images_folder (str): Path to the folder containing checkerboard images.
+# Sub-pixel corner refinement, and how hard to try. Loosened for the stereo
+# solve, which needs corners to agree across two views.
+_CORNER_CRITERIA = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+_STEREO_CRITERIA = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+
+
+def checkerboard_grid():
+    """The board's inner-corner layout and its corner positions in board space.
+
+    Read from ``utils/settings.py`` -- ``checkerboard_rows``/``columns`` count
+    inner corners (squares minus one) and ``checkerboard_scaling`` is the square
+    size in metres. Every detection goes through here so the three places that
+    use the board cannot disagree about its geometry.
+
     Returns:
-        tuple: A tuple containing the following elements:
-            - ret (float): The overall RMS re-projection error.
-            - mtx (numpy.ndarray): The camera matrix.
-            - dist (numpy.ndarray): The distortion coefficients.
+        tuple: ``((rows, columns), objp)`` with ``objp`` of shape (rows*columns, 3).
     """
-
-    images_names = sorted(glob.glob(images_folder))
-    images = []
-    for imname in images_names:
-        im = cv.imread(imname, 1)
-        images.append(im)
- 
-    #criteria used by checkerboard pattern detector.
-    #Change this if the code can't find the checkerboard
-    criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
-    # # LITTLE CHECKERBOARD
-    # rows = 7 #number of checkerboard rows.
-    # columns = 10 #number of checkerboard columns.
-    # world_scaling = 0.025 #change this to the real world square size. Or not.
-
-    # # BIGGER CHECKERBOARD AT LAAS
-    # rows = 6 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.108 #change this to the real world square size.
-
-    # # BIGGER CHECKERBOARD AT NUS RLS
-    # rows = 5 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.107 #change this to the real world square size.
-    
     rows = settings.checkerboard_rows
     columns = settings.checkerboard_columns
-    world_scaling = settings.checkerboard_scaling
+    objp = np.zeros((rows * columns, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:rows, 0:columns].T.reshape(-1, 2)
+    return (rows, columns), objp * settings.checkerboard_scaling
 
-    #coordinates of squares in the checkerboard world space
-    objp = np.zeros((rows*columns,3), np.float32)
-    objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
-    objp = world_scaling* objp
- 
-    #frame dimensions. Frames should be the same size.
-    width = images[0].shape[1]
-    height = images[0].shape[0]
- 
-    #Pixel coordinates of checkerboards
-    imgpoints = [] # 2d points in image plane.
- 
-    #coordinates of the checkerboard in checkerboard world space.
-    objpoints = [] # 3d point in real world space
- 
- 
+
+def read_image_folder(images_folder):
+    """Load every image matching a glob, in sorted order.
+
+    Sorted order is what pairs one camera's shots with another's, so the two
+    folders must hold one image per shot under the same names.
+    """
+    return [cv.imread(name, 1) for name in sorted(glob.glob(images_folder))]
+
+
+def find_checkerboard(image, size, refine=True):
+    """Locate the checkerboard in one image, refined to sub-pixel accuracy.
+
+    Returns:
+        np.ndarray | None: the corners, or None when the board is not visible.
+    """
+    if image is None:
+        return None
+    gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    found, corners = cv.findChessboardCorners(gray, size, None)
+    if not found:
+        return None
+    if refine:
+        corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), _CORNER_CRITERIA)
+    return corners
+
+
+def calibrate_intrinsics(images_folder, show=True):
+    """
+    Calibrate one camera's intrinsics from checkerboard images.
+
+    Args:
+        images_folder (str): glob matching that camera's checkerboard images.
+        show (bool): draw each detection in a window. Turn off to run without a
+            display, e.g. recalibrating a recorded session over SSH or in CI.
+
+    Returns:
+        tuple: ``(rmse, mtx, dist)`` -- reprojection error, camera matrix and
+        distortion coefficients.
+    """
+    images = read_image_folder(images_folder)
+    size, objp = checkerboard_grid()
+
+    objpoints, imgpoints = [], []
     for frame in images:
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
- 
-        #find the checkerboard
-        ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
- 
-        if ret == True:
- 
-            #Convolution size used to improve corner detection. Don't make this too large.
-            conv_size = (11, 11)
- 
-            #opencv can attempt to improve the checkerboard coordinates
-            corners = cv.cornerSubPix(gray, corners, conv_size, (-1, -1), criteria)
-            cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
+        corners = find_checkerboard(frame, size)
+        if corners is None:
+            continue
+        if show:
+            cv.drawChessboardCorners(frame, size, corners, True)
             cv.imshow('img', frame)
-            k = cv.waitKey(50)
- 
-            objpoints.append(objp)
-            imgpoints.append(corners)
- 
-    ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
-    # print('rmse:', ret)
-    # print('camera matrix:\n', mtx)
-    # print('distortion coeffs:', dist)
-    cv.destroyAllWindows()
-    # print('Rs:\n', rvecs)
-    # print('Ts:\n', tvecs)
- 
-    return ret, mtx, dist
+            cv.waitKey(50)
+        objpoints.append(objp)
+        imgpoints.append(corners)
 
-def is_order_consistent(corners1, corners2):
+    height, width = images[0].shape[:2]
+    rmse, mtx, dist, _, _ = cv.calibrateCamera(
+        objpoints, imgpoints, (width, height), None, None)
+    cv.destroyAllWindows()
+    return rmse, mtx, dist
+
+
+def corners_consistently_ordered(corners1, corners2):
     """
     Checks if the corner order is consistent between two sets of detected corners.
     Args:
@@ -115,104 +115,63 @@ def is_order_consistent(corners1, corners2):
     angle_diff = np.dot(vector_1, vector_2) / (np.linalg.norm(vector_1) * np.linalg.norm(vector_2))
     return angle_diff > 0.9  # Adjust threshold as needed to ensure similar orientation
 
-def stereo_calibrate(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2):
+def calibrate_stereo_pair(mtx1, dist1, mtx2, dist2, frames_folder_1, frames_folder_2,
+                     show=True):
     """
-    Perform stereo calibration using images from two cameras.
+    Solve the pose of one camera relative to another, from shared board views.
+
+    The intrinsics are held fixed (``CALIB_FIX_INTRINSIC``), so this solves only
+    the relative pose -- run :func:`calibrate_intrinsics` on each camera first. Only
+    shots where *both* cameras see the board contribute, which is what lets a
+    ring of cameras be calibrated pair by pair without the board ever being
+    visible to all of them at once.
+
     Args:
-        mtx1 (numpy.ndarray): Camera matrix for the first camera.
-        dist1 (numpy.ndarray): Distortion coefficients for the first camera.
-        mtx2 (numpy.ndarray): Camera matrix for the second camera.
-        dist2 (numpy.ndarray): Distortion coefficients for the second camera.
-        frames_folder_1 (str): Path to the folder containing images from the first camera.
-        frames_folder_2 (str): Path to the folder containing images from the second camera.
+        mtx1, dist1: first camera's intrinsics.
+        mtx2, dist2: second camera's intrinsics.
+        frames_folder_1, frames_folder_2 (str): globs for the two cameras'
+            images. Sorted order pairs them, so shot *n* must be named alike.
+        show (bool): draw each accepted pair. Turn off to run without a display.
+
     Returns:
-        tuple: A tuple containing:
-            - ret (float): The overall RMS re-projection error.
-            - R (numpy.ndarray): The rotation matrix between the coordinate systems of the first and second cameras.
-            - T (numpy.ndarray): The translation vector between the coordinate systems of the first and second cameras.
+        tuple: ``(rmse, R, T)`` in OpenCV's convention, ``p_2 = R @ p_1 + T``.
     """
+    c1_images = read_image_folder(frames_folder_1)
+    c2_images = read_image_folder(frames_folder_2)
+    size, objp = checkerboard_grid()
 
-    #read the synched frames
-    c1_images_names = sorted(glob.glob(frames_folder_1))
-    c2_images_names = sorted(glob.glob(frames_folder_2))
-
-    c1_images = []
-    c2_images = []
-    for im1, im2 in zip(c1_images_names, c2_images_names):
-        _im = cv.imread(im1, 1)
-        c1_images.append(_im)
- 
-        _im = cv.imread(im2, 1)
-        c2_images.append(_im)
- 
-    #change this if stereo calibration not good.
-    criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
-    
-    # # LITTLE CHECKERBOARD
-    # rows = 7 #number of checkerboard rows.
-    # columns = 10 #number of checkerboard columns.
-    # world_scaling = 0.025 #change this to the real world square size. Or not.
-
-    # # BIGGER CHECKERBOARD AT LAAS
-    # rows = 6 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.108 #change this to the real world square size.
-
-    # BIGGER CHECKERBOARD AT NUS RLS
-    # rows = 5 #number of checkerboard rows.
-    # columns = 7 #number of checkerboard columns.
-    # world_scaling = 0.107 #change this to the real world square size.
-
-    rows = settings.checkerboard_rows
-    columns = settings.checkerboard_columns
-    world_scaling = settings.checkerboard_scaling
-
-    #coordinates of squares in the checkerboard world space
-    objp = np.zeros((rows*columns,3), np.float32)
-    objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
-    objp = world_scaling* objp
- 
-    #frame dimensions. Frames should be the same size.
-    width = c1_images[0].shape[1]
-    height = c1_images[0].shape[0]
- 
-    #Pixel coordinates of checkerboards
-    imgpoints_left = [] # 2d points in image plane.
-    imgpoints_right = []
- 
-    #coordinates of the checkerboard in checkerboard world space.
-    objpoints = [] # 3d point in real world space
- 
+    objpoints, imgpoints_left, imgpoints_right = [], [], []
     for frame1, frame2 in zip(c1_images, c2_images):
-        gray1 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
-        gray2 = cv.cvtColor(frame2, cv.COLOR_BGR2GRAY)
-        c_ret1, corners1 = cv.findChessboardCorners(gray1, (rows, columns), None)
-        c_ret2, corners2 = cv.findChessboardCorners(gray2, (rows, columns), None)
- 
-        if c_ret1 == True and c_ret2 == True:
-            corners1 = cv.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), criteria)
-            corners2 = cv.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), criteria)
+        corners1 = find_checkerboard(frame1, size)
+        corners2 = find_checkerboard(frame2, size)
+        if corners1 is None or corners2 is None:
+            continue
+        if not corners_consistently_ordered(corners1, corners2):
+            continue
 
-            if is_order_consistent(corners1, corners2):
- 
-                cv.drawChessboardCorners(frame1, (rows, columns), corners1, c_ret1)
-                cv.imshow('img', frame1)
+        if show:
+            # waitKey(0) blocks until a key is pressed, which is what the
+            # operator wants when checking detections by eye, but hangs forever
+            # with no display or keyboard attached.
+            cv.drawChessboardCorners(frame1, size, corners1, True)
+            cv.imshow('img', frame1)
+            cv.drawChessboardCorners(frame2, size, corners2, True)
+            cv.imshow('img2', frame2)
+            cv.waitKey(0)
 
-                cv.drawChessboardCorners(frame2, (rows, columns), corners2, c_ret2)
-                cv.imshow('img2', frame2)
-                k = cv.waitKey(0)
+        objpoints.append(objp)
+        imgpoints_left.append(corners1)
+        imgpoints_right.append(corners2)
 
-                objpoints.append(objp)
-                imgpoints_left.append(corners1)
-                imgpoints_right.append(corners2)
-
-    stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
-    ret, CM1, dist1, CM2, dist2, R, T, E, F = cv.stereoCalibrate(objpoints, imgpoints_left, imgpoints_right, mtx1, dist1,
-                                                                 mtx2, dist2, (width, height), criteria = criteria, flags = stereocalibration_flags)
+    height, width = c1_images[0].shape[:2]
+    rmse, _, _, _, _, R, T, _, _ = cv.stereoCalibrate(
+        objpoints, imgpoints_left, imgpoints_right, mtx1, dist1, mtx2, dist2,
+        (width, height), criteria=_STEREO_CRITERIA, flags=cv.CALIB_FIX_INTRINSIC)
     cv.destroyAllWindows()
-    return ret, R, T
+    return rmse, R, T
 
-def save_cam_params(mtx, dist, reproj, path):
+
+def write_intrinsics_file(mtx, dist, reproj, path):
     """
     Save camera parameters to a file.
     Args:
@@ -230,44 +189,7 @@ def save_cam_params(mtx, dist, reproj, path):
     # note you *release* you don't close() a FileStorage object
     cv_file.release()
 
-def load_cam_pose(filename):
-    """
-        Load the rotation matrix and translation vector from a YAML file.
-        Args:
-            filename (str): The path to the YAML file.
-        Returns:
-            rotation_matrix (np.ndarray): The 3x3 rotation matrix.
-            translation_vector (np.ndarray): The 3x1 translation vector.
-    """
-
-    with open(filename, 'r') as file:
-        data = yaml.safe_load(file)
-
-    rotation_matrix = np.array(data['rotation_matrix']['data']).reshape((3, 3))
-    translation_vector = np.array(data['translation_vector']['data']).reshape((3, 1))
-    
-    return rotation_matrix, translation_vector
-
-def load_cam_pose_rpy(filename):
-    """
-        Load the euler angles and translation vector from a YAML file.
-        Args:
-            filename (str): The path to the YAML file.
-        Returns:
-            euler (np.ndarray): The 3x1 euler sequence.
-            translation_vector (np.ndarray): The 3x1 translation vector.
-    """
-
-    with open(filename, 'r') as file:
-        data = yaml.safe_load(file)
-
-    euler = np.array(data['rotation_rpy']['data']).reshape((3, 1))
-    translation_vector = np.array(data['translation_vector']['data']).reshape((3, 1))
-    
-    return euler, translation_vector
-
-
-def load_cam_params(path):
+def load_intrinsics(path):
     """
     Loads camera parameters from a given file.
     Args:
@@ -289,7 +211,7 @@ def load_cam_params(path):
     cv_file.release()
     return camera_matrix, dist_matrix
 
-def save_cam_to_cam_params(mtx1, dist1, mtx2, dist2, R, T, rmse, path):
+def write_stereo_file(mtx1, dist1, mtx2, dist2, R, T, rmse, path):
     """
     Save stereo camera calibration parameters to a file.
     Args:
@@ -315,7 +237,7 @@ def save_cam_to_cam_params(mtx1, dist1, mtx2, dist2, R, T, rmse, path):
     # note you *release* you don't close() a FileStorage object
     cv_file.release()
 
-def load_cam_to_cam_params(path):
+def load_stereo_pose(path):
     """
     Loads camera-to-camera calibration parameters from a given file.
     This function reads the rotation matrix (R) and translation vector (T) from a 
@@ -341,305 +263,96 @@ def load_cam_to_cam_params(path):
     return R, T
 
 # Function to detect the ArUco marker and estimate the camera pose
-def get_aruco_pose(frame, camera_matrix, dist_coeffs, detector, marker_size):
-    # Convert the frame to grayscale
-    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+def wand_positions_in_camera(images_folder, camera_matrix, dist_coeffs, detector,
+                             marker_size, expected):
+    """Where the wand tip was, in camera coordinates, for each pointed position.
 
-    marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
-                              [marker_size / 2, marker_size / 2, 0],
-                              [marker_size / 2, -marker_size / 2, 0],
-                              [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-    
-    # Detect the markers in the image
-    corners, ids, _ = detector.detectMarkers(gray)
-    
-    if ids is not None and len(corners) > 0:
-        # Extract the corners of the first detected marker for pose estimation
-        # Reshape the first marker's corners for solvePnP
-        corners_for_solvePnP = corners[0].reshape(-1, 2)
-        
-        # Estimate the pose of each marker
-        _, R, t = cv.solvePnP(marker_points, corners_for_solvePnP, camera_matrix, dist_coeffs, False, cv.SOLVEPNP_IPPE_SQUARE)
-        
-        # Convert the rotation vector to a rotation matrix
-        rotation_matrix, _ = cv.Rodrigues(R)
-        
-        # Now we can form the transformation matrix
-        transformation_matrix = np.eye(4)
-        transformation_matrix[:3, :3] = rotation_matrix
-        transformation_matrix[:3, 3] = t.flatten()
-        
-        return transformation_matrix, corners[0], R, t
-    else:
-        return None, None, None, None
-    
-def get_relative_pose_robot_in_cam(images_folder,camera_matrix,dist_coeffs, detector, marker_size):
+    One image per position, each showing the wand's aruco marker. The marker pose
+    gives the wand's pose; the tip is a fixed offset from it
+    (``settings.wand_end_effector_local_pos``).
+
+    Args:
+        images_folder (str): glob matching the images, one per pointed position.
+        camera_matrix, dist_coeffs: that camera's intrinsics.
+        detector: an ``cv.aruco.ArucoDetector``.
+        marker_size (float): marker side length in metres.
+        expected (int): how many positions this frame definition needs.
+
+    Returns:
+        list: one (3,) position per image, in camera coordinates.
+    """
     images_names = sorted(glob.glob(images_folder))
-    images = []
-    for imname in images_names:
-        im = cv.imread(imname, 1)
-        images.append(im)
-
-    assert len(images)==4, "number of images to get robot base must be 4"
-    
-    wand_local = settings.wand_end_effector_local_pos
-
-    wand_pos_cam_frame = []
-    for ii, frame in enumerate(images):
-        # Convert the frame to grayscale
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-        marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, -marker_size / 2, 0],
-                                [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-        
-        # Detect the markers in the image
-        corners, ids, _ = detector.detectMarkers(gray)
-        
-        if ids is not None and len(corners) > 0:
-            # Extract the corners of the first detected marker for pose estimation
-            # Reshape the first marker's corners for solvePnP
-            corners_for_solvePnP = corners[0].reshape(-1, 2)
-            
-            # Estimate the pose of each marker
-            _, R, t = cv.solvePnP(marker_points, corners_for_solvePnP, camera_matrix, dist_coeffs, False, cv.SOLVEPNP_IPPE_SQUARE)
-            
-            # Convert the rotation vector to a rotation matrix
-            rotation_matrix, _ = cv.Rodrigues(R)
-            
-            # Now we can form the transformation matrix
-            transformation_matrix = np.eye(4)
-            transformation_matrix[:3, :3] = rotation_matrix
-            transformation_matrix[:3, 3] = t.flatten()
-        
-            wand_pos_cam_frame.append((t+rotation_matrix@wand_local).flatten())
-
-    P1 = cam_center_robot = (wand_pos_cam_frame[0]+wand_pos_cam_frame[1])/2
-    P2 = (wand_pos_cam_frame[2]+wand_pos_cam_frame[3])/2
-    P3 = wand_pos_cam_frame[0]
-
-    P2P1 = P1-P2
-    P1P3 = P3-P1
-
-    Vz = np.cross(P2P1, P1P3)
-    Vy = np.cross(Vz,P2P1)
-    Vx = P2P1
-
-    x_axis = Vx/np.linalg.norm(Vx)
-    y_axis = Vy/np.linalg.norm(Vy)
-    z_axis = Vz/np.linalg.norm(Vz)
-
-    # 1. Construct the rotation matrix
-    cam_R_robot = np.column_stack((x_axis, y_axis, z_axis))
-
-    return cam_center_robot, cam_R_robot
-
-def get_relative_pose_human_in_cam(images_folder,camera_matrix,dist_coeffs, detector, marker_size):
-    images_names = sorted(glob.glob(images_folder))
-    images = []
-    for imname in images_names:
-        im = cv.imread(imname, 1)
-        images.append(im)
-
-    assert len(images)==3, "number of images to get robot base must be 4"
-    
-    wand_local = settings.wand_end_effector_local_pos
-
-    wand_pos_cam_frame = []
-    for ii, frame in enumerate(images):
-        # Convert the frame to grayscale
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-        marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, -marker_size / 2, 0],
-                                [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-        
-        # Detect the markers in the image
-        corners, ids, _ = detector.detectMarkers(gray)
-        
-        if ids is not None and len(corners) > 0:
-            # Extract the corners of the first detected marker for pose estimation
-            # Reshape the first marker's corners for solvePnP
-            corners_for_solvePnP = corners[0].reshape(-1, 2)
-            
-            # Estimate the pose of each marker
-            _, R, t = cv.solvePnP(marker_points, corners_for_solvePnP, camera_matrix, dist_coeffs, False, cv.SOLVEPNP_IPPE_SQUARE)
-            
-            # Convert the rotation vector to a rotation matrix
-            rotation_matrix, _ = cv.Rodrigues(R)
-            
-            # Now we can form the transformation matrix
-            transformation_matrix = np.eye(4)
-            transformation_matrix[:3, :3] = rotation_matrix
-            transformation_matrix[:3, 3] = t.flatten()
-        
-            wand_pos_cam_frame.append((t+rotation_matrix@wand_local).flatten())
-
-    P1 = cam_center_human = wand_pos_cam_frame[0]
-    P2 = wand_pos_cam_frame[1]
-    P3 = wand_pos_cam_frame[2]
-
-    P1P2 = P2-P1
-    P1P3 = P3-P1
-
-    Vy = np.cross(P1P2,P1P3)
-    Vz = np.cross(P1P2,Vy)
-    Vx = P1P2
-
-    x_axis = Vx/np.linalg.norm(Vx)
-    y_axis = Vy/np.linalg.norm(Vy)
-    z_axis = Vz/np.linalg.norm(Vz)
-
-    # 1. Construct the rotation matrix
-    cam_R_human = np.column_stack((x_axis, y_axis, z_axis))
-
-    return cam_center_human, cam_R_human
-
-def get_relative_pose_world_in_cam(images_folder,camera_matrix,dist_coeffs, detector, marker_size):
-    images_names = sorted(glob.glob(images_folder))
-    images = []
-    for imname in images_names:
-        im = cv.imread(imname, 1)
-        images.append(im)
-
-    assert len(images)==3, "number of images to get world must be 3"
+    images = [cv.imread(name, 1) for name in images_names]
+    assert len(images) == expected, \
+        f"need exactly {expected} images to define this frame, found {len(images)}"
 
     wand_local = settings.wand_end_effector_local_pos
+    half = marker_size / 2
+    marker_points = np.array([[-half, half, 0], [half, half, 0],
+                              [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
 
-    wand_pos_cam_frame = []
-    for ii, frame in enumerate(images):
-        # Convert the frame to grayscale
+    positions = []
+    for frame in images:
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-        marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, -marker_size / 2, 0],
-                                [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-        
-        # Detect the markers in the image
         corners, ids, _ = detector.detectMarkers(gray)
-        
-        if ids is not None and len(corners) > 0:
-            # Extract the corners of the first detected marker for pose estimation
-            # Reshape the first marker's corners for solvePnP
-            corners_for_solvePnP = corners[0].reshape(-1, 2)
-            
-            # Estimate the pose of each marker
-            _, R, t = cv.solvePnP(marker_points, corners_for_solvePnP, camera_matrix, dist_coeffs, False, cv.SOLVEPNP_IPPE_SQUARE)
-            
-            # Convert the rotation vector to a rotation matrix
-            rotation_matrix, _ = cv.Rodrigues(R)
-            
-            # Now we can form the transformation matrix
-            transformation_matrix = np.eye(4)
-            transformation_matrix[:3, :3] = rotation_matrix
-            transformation_matrix[:3, 3] = t.flatten()
-        
-            wand_pos_cam_frame.append((t+rotation_matrix@wand_local).flatten())
+        if ids is None or len(corners) == 0:
+            continue
+        _, rvec, tvec = cv.solvePnP(marker_points, corners[0].reshape(-1, 2),
+                                    camera_matrix, dist_coeffs, False,
+                                    cv.SOLVEPNP_IPPE_SQUARE)
+        rotation, _ = cv.Rodrigues(rvec)
+        positions.append((tvec + rotation @ wand_local).flatten())
+    return positions
 
-    P1 = cam_center_world = wand_pos_cam_frame[0]
-    P2 = wand_pos_cam_frame[1]
-    P3 = wand_pos_cam_frame[2]
 
-    P1P2 = P2-P1
-    P1P3 = P3-P1
+def frame_from_directions(origin, x_direction, in_plane_direction):
+    """Build a right-handed frame at ``origin`` from two directions.
 
-    Vz = np.cross(P1P2, P1P3)
-    Vy = np.cross(Vz,P1P2)
-    Vx = P1P2
+    ``x_direction`` becomes the x axis; ``in_plane_direction`` only has to be
+    non-collinear with it, and fixes the remaining rotation about x. Both are
+    vectors *from* the origin, given in whatever frame the points were measured
+    in -- passing them as directions rather than as points keeps which way each
+    axis runs explicit, since the two world frames differ precisely in that.
 
-    x_axis = Vx/np.linalg.norm(Vx)
-    y_axis = Vy/np.linalg.norm(Vy)
-    z_axis = Vz/np.linalg.norm(Vz)
+    Returns:
+        tuple: ``(origin, R)`` where ``R``'s columns are the new frame's axes
+        expressed in the measured frame, so ``R`` maps new-frame coordinates into
+        the measured one.
+    """
+    Vx = np.asarray(x_direction, dtype=float)
+    Vz = np.cross(Vx, np.asarray(in_plane_direction, dtype=float))
+    Vy = np.cross(Vz, Vx)
+    axes = [V / np.linalg.norm(V) for V in (Vx, Vy, Vz)]
+    return origin, np.column_stack(axes)
 
-    # 1. Construct the rotation matrix
-    cam_R_world = np.column_stack((x_axis, y_axis, z_axis))
 
-    return cam_center_world, cam_R_world
-    
-# Function to save the translation vector to a YAML file
-def save_pose_rpy_to_yaml(translation_vector, rotation_sequence, filename):
+def robot_frame_in_camera(images_folder, camera_matrix, dist_coeffs, detector,
+                                   marker_size):
+    """The robot base frame, expressed in camera coordinates.
 
-    # Ensure inputs are 1D or column vectors of correct shape
-    assert translation_vector.shape in [(3,), (3, 1)], "Translation vector must have shape (3,) or (3, 1)"
-    assert rotation_sequence.shape in [(3,), (3, 1)], "Rotation sequence must have shape (3,) or (3, 1)"
-    
-    # Prepare the data to be saved in YAML format
-    data = {
-        'translation_vector': {
-            'rows': 3,
-            'cols': 1,
-            'dt': 'd',
-            'data': translation_vector.flatten().tolist()
-        },
-        'rotation_rpy': {
-            'rows': 3,
-            'cols': 1,
-            'dt': 'd',
-            'data': rotation_sequence.flatten().tolist()
-        }
-    }
-    
-    # Write to the YAML file
-    with open(filename, 'w') as file:
-        yaml.dump(data, file, default_flow_style=False)  # Use block style for readability
+    Four pointed positions: two pairs, each straddling an axis of the base, so
+    the frame origin is the midpoint of the first pair and x runs towards the
+    midpoint of the second.
+    """
+    P = wand_positions_in_camera(images_folder, camera_matrix, dist_coeffs, detector,
+                                 marker_size, expected=4)
+    origin = (P[0] + P[1]) / 2
+    # x runs from the second pair's midpoint back towards the origin, which is
+    # the opposite sense to the ground frame below.
+    return frame_from_directions(origin, origin - (P[2] + P[3]) / 2, P[0] - origin)
 
-# Function to detect the ArUco marker and estimate the camera pose
-def get_camera_pose(frame, camera_matrix, dist_coeffs, detector, marker_size):
-    # Convert the frame to grayscale
-    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
 
-    marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
-                              [marker_size / 2, marker_size / 2, 0],
-                              [marker_size / 2, -marker_size / 2, 0],
-                              [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-    
-    # Detect the markers in the image
-    corners, ids, _ = detector.detectMarkers(gray)
-    
-    if ids is not None and len(corners) > 0:
-        # Extract the corners of the first detected marker for pose estimation
-        # Reshape the first marker's corners for solvePnP
-        corners_for_solvePnP = corners[0].reshape(-1, 2)
-        
-        # Estimate the pose of each marker
-        _, R, t = cv.solvePnP(marker_points, corners_for_solvePnP, camera_matrix, dist_coeffs, False, cv.SOLVEPNP_IPPE_SQUARE)
+def ground_frame_in_camera(images_folder, camera_matrix, dist_coeffs, detector,
+                                   marker_size):
+    """A frame marked on the ground, expressed in camera coordinates.
 
-        # Convert the rotation vector to a rotation matrix
-        rotation_matrix, _ = cv.Rodrigues(R)
-        
-        # Now we can form the transformation matrix
-        transformation_matrix = np.eye(4)
-        transformation_matrix[:3, :3] = rotation_matrix
-        transformation_matrix[:3, 3] = t.flatten()
-        
-        return transformation_matrix, corners[0], R, t
-    else:
-        return None, None, None, None
+    Three pointed positions: the origin, a point along x, and a third fixing the
+    plane.
+    """
+    P = wand_positions_in_camera(images_folder, camera_matrix, dist_coeffs, detector,
+                                 marker_size, expected=3)
+    return frame_from_directions(P[0], P[1] - P[0], P[2] - P[0])
 
-# Function to save the rotation matrix and translation vector to a YAML file
-def save_pose_matrix_to_yaml(rotation_matrix, translation_vector, filename):
-    # Prepare the data to be saved in YAML format
-    data = {
-        'rotation_matrix': {
-            'rows': 3,
-            'cols': 3,
-            'dt': 'd',
-            'data': rotation_matrix.flatten().tolist()
-        },
-        'translation_vector': {
-            'rows': 3,
-            'cols': 1,
-            'dt': 'd',
-            'data': translation_vector.flatten().tolist()
-        }
-    }
-    
-    # Write to the YAML file
-    with open(filename, 'w') as file:
-        yaml.dump(data, file)
 
 def list_cameras_with_v4l2():
     """
@@ -663,40 +376,424 @@ def list_cameras_with_v4l2():
         print("Error using v4l2-ctl:", e)
     return cameras
 
-def get_cameras_params(K1, D1, K2, D2, R, T):
-    dict_cam = {
-        "cam1": {
-            "mtx":np.array(K1),
-            "dist":D1,
-            "rotation":np.eye(3),
-            "translation":[
-                0.,
-                0.,
-                0.,
-            ],
-        },
-        "cam2": {
-            "mtx":np.array(K2),
-            "dist":D2,
-            "rotation":R,
-            "translation":T,
-        },
+# ---------------------------------------------------------------------------
+# COMFI layout -- the calibration format RT-COSMIK reads
+# ---------------------------------------------------------------------------
+#
+#   <root>/intrinsics/camera_<i>_intrinsics.yaml
+#   <root>/extrinsics/cam_to_cam/camera_<a>_to_camera_<b>.yaml
+#   <root>/extrinsics/cam_to_world/camera_<i>/camera_<i>_extrinsics.yaml
+#
+# Intrinsics and stereo results are OpenCV FileStorage documents, written in
+# OpenCV's own convention. World poses are plain YAML and hold the pose of the
+# *camera in the world frame* (p_world = R @ p_cam + T), which is the opposite
+# of what solvePnP gives, so the conversion happens here rather than in every
+# consumer.
+
+
+def intrinsics_path(root, camera_id):
+    """Path to one camera's intrinsics in the COMFI layout."""
+    return os.path.join(root, "intrinsics", f"camera_{camera_id}_intrinsics.yaml")
+
+
+def stereo_pose_path(root, cam_a, cam_b):
+    """Path to a stereo result in the COMFI layout."""
+    return os.path.join(root, "extrinsics", "cam_to_cam",
+                        f"camera_{cam_a}_to_camera_{cam_b}.yaml")
+
+
+def world_pose_path(root, camera_id):
+    """Path to one camera's world pose in the COMFI layout."""
+    return os.path.join(root, "extrinsics", "cam_to_world",
+                        f"camera_{camera_id}", f"camera_{camera_id}_extrinsics.yaml")
+
+
+def _ensure_parent(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Which physical camera is which
+# ---------------------------------------------------------------------------
+#
+# The ids in the layout (camera_0, camera_2, ...) are v4l2 indices, which record
+# the order the kernel happened to enumerate devices in. They are not identity:
+# they can change on reboot or when a camera is replugged. If they change and
+# nothing checks, RT-COSMIK silently applies one camera's intrinsics and pose to
+# a different physical camera, which produces a plausible-looking but wrong
+# reconstruction rather than an error.
+#
+# So the hardware behind each id is recorded at calibration time and checked
+# before use. The USB port path is the discriminator: identical cameras of the
+# same model usually share a placeholder serial (this rig's report "SN0001"), so
+# a serial cannot tell two of them apart, while the port path always can.
+
+
+def camera_manifest_path(root):
+    """Path to the record of which physical camera each id refers to."""
+    return os.path.join(root, "cameras.yaml")
+
+
+def camera_hardware_info(index):
+    """Describe the hardware behind one v4l2 index.
+
+    Returns a dict with whatever could be read: ``bus_info`` (the USB port path,
+    the only field that reliably distinguishes identical cameras), ``model``,
+    ``serial``, and ``vendor_product``. Missing fields are omitted rather than
+    guessed.
+    """
+    info = {}
+    sysfs = f"/sys/class/video4linux/video{index}"
+    name_path = os.path.join(sysfs, "name")
+    if os.path.isfile(name_path):
+        with open(name_path) as handle:
+            info["model"] = handle.read().strip()
+
+    device = os.path.join(sysfs, "device")
+    if os.path.islink(device) or os.path.isdir(device):
+        usb_root = os.path.realpath(os.path.join(device, ".."))
+        for field, key in (("serial", "serial"), ("product", "product"),
+                           ("manufacturer", "manufacturer")):
+            path = os.path.join(usb_root, field)
+            if os.path.isfile(path):
+                with open(path) as handle:
+                    info[key] = handle.read().strip()
+        vendor = os.path.join(usb_root, "idVendor")
+        product = os.path.join(usb_root, "idProduct")
+        if os.path.isfile(vendor) and os.path.isfile(product):
+            with open(vendor) as v, open(product) as p:
+                info["vendor_product"] = f"{v.read().strip()}:{p.read().strip()}"
+
+    # bus_info as v4l2 reports it, e.g. usb-0000:00:14.0-8.1
+    try:
+        output = subprocess.check_output(
+            ["v4l2-ctl", "-d", f"/dev/video{index}", "--info"],
+            stderr=subprocess.DEVNULL).decode()
+        for line in output.splitlines():
+            if "Bus info" in line:
+                info["bus_info"] = line.split(":", 1)[1].strip()
+                break
+    except Exception:
+        pass
+    return info
+
+
+def save_camera_manifest(root, camera_ids, labels=None):
+    """Record which physical camera each id refers to, next to the calibration.
+
+    Args:
+        root (str): calibration root to write into.
+        camera_ids (Sequence[int]): the ids being calibrated.
+        labels (dict | None): optional ``{camera_id: human name}``, e.g.
+            ``{0: "front_left"}``, for talking about cameras without indices.
+    """
+    labels = labels or {}
+    entries = []
+    for camera_id in camera_ids:
+        entry = {"id": int(camera_id)}
+        if camera_id in labels:
+            entry["label"] = labels[camera_id]
+        entry.update(camera_hardware_info(camera_id))
+        entries.append(entry)
+
+    path = _ensure_parent(camera_manifest_path(root))
+    with open(path, "w") as handle:
+        yaml.safe_dump({"cameras": entries}, handle,
+                       default_flow_style=False, sort_keys=False)
+    return path
+
+
+def count_shared_checkerboard_views(frames_folder_1, frames_folder_2):
+    """How many image pairs show the checkerboard to *both* cameras.
+
+    Stereo calibration uses only those shots, so with more than two cameras this
+    is the number that matters: adjacent cameras in a ring share less and less of
+    their view, and a pair can end up with too few shared shots to calibrate
+    while each camera's own intrinsics still look fine. Counting first turns that
+    into a clear message instead of a confusing failure inside cv.stereoCalibrate.
+
+    Returns:
+        tuple: ``(shared, total)``.
+    """
+    images_1 = read_image_folder(frames_folder_1)
+    images_2 = read_image_folder(frames_folder_2)
+    size, _ = checkerboard_grid()
+
+    # Corner refinement does not change whether the board was found, and this
+    # runs over every shot before calibrating, so skip it here.
+    shared = sum(1 for f1, f2 in zip(images_1, images_2)
+                 if find_checkerboard(f1, size, refine=False) is not None
+                 and find_checkerboard(f2, size, refine=False) is not None)
+    return shared, min(len(images_1), len(images_2))
+
+
+def save_intrinsics(mtx, dist, reproj, camera_id, root):
+    """Write one camera's intrinsics into the COMFI layout."""
+    path = _ensure_parent(intrinsics_path(root, camera_id))
+    write_intrinsics_file(mtx, dist, reproj, path)
+    return path
+
+
+def save_stereo_pose(mtx1, dist1, mtx2, dist2, R, T, rmse, cam_a, cam_b, root):
+    """Write a stereo result into the COMFI layout.
+
+    ``R``/``T`` are stored exactly as ``cv2.stereoCalibrate`` returns them
+    (``p_b = R @ p_a + T``): they relate two cameras, with no world involved, so
+    no conversion applies.
+    """
+    path = _ensure_parent(stereo_pose_path(root, cam_a, cam_b))
+    write_stereo_file(mtx1, dist1, mtx2, dist2, R, T, rmse, path)
+    return path
+
+
+def invert_pose(R, T):
+    """Swap a pose between the two directions.
+
+    Given ``p_b = R @ p_a + T`` returns the pair for ``p_a = R' @ p_b + T'``.
+    Useful because ``cv2.solvePnP`` and the ``get_relative_pose_*_in_cam``
+    helpers return the world expressed *in camera* coordinates, while RT-COSMIK
+    stores the camera expressed *in world* coordinates.
+    """
+    R = np.asarray(R, dtype=float).reshape(3, 3)
+    T = np.asarray(T, dtype=float).reshape(3)
+    return R.T, -R.T @ T
+
+
+def save_world_pose(world_R_cam, world_T_cam, camera_id, root):
+    """Write a camera's world pose into the COMFI layout.
+
+    Expects the pose already in RT-COSMIK's convention: the pose of the *camera
+    in the world frame*, so ``world_R_cam`` is the camera's orientation in world
+    coordinates and ``world_T_cam`` its position in world coordinates, giving
+    ``p_world = R @ p_cam + T``. Nothing is inverted here -- a function that
+    silently flipped the direction would be impossible to reason about when the
+    caller already holds the right one.
+
+    The ``get_relative_pose_*_in_cam`` helpers return the *opposite* direction
+    (world expressed in camera coordinates), so their output must be passed
+    through :func:`invert_pose` first. As a sanity check, ``world_T_cam`` is the
+    camera's physical position in the room: if it comes out near the origin, the
+    pose is the wrong way round.
+
+    Args:
+        world_R_cam: camera orientation in world coordinates (3x3).
+        world_T_cam: camera position in world coordinates (3,), metres.
+        camera_id (int): camera this pose belongs to.
+        root (str): calibration root to write into.
+    """
+    R = np.asarray(world_R_cam, dtype=float).reshape(3, 3)
+    T = np.asarray(world_T_cam, dtype=float).reshape(3)
+
+    path = _ensure_parent(world_pose_path(root, camera_id))
+    data = {
+        "camera_extrinsics": {
+            "frame_from": f"camera_{camera_id}",
+            "frame_to": "world",
+            "rotation_matrix": [[float(v) for v in row] for row in R],
+            "translation_vector": [float(v) for v in T],
+        }
     }
+    with open(path, "w") as handle:
+        yaml.safe_dump(data, handle, default_flow_style=False, sort_keys=False)
+    return path
 
-    rotations=[]
-    translations=[]
-    dists=[]
-    mtxs=[]
-    projections=[]
 
-    for cam in dict_cam :
-        rotation=np.array(dict_cam[cam]["rotation"])
-        rotations.append(rotation)
-        translation=np.array([dict_cam[cam]["translation"]]).reshape(3,1)
-        translations.append(translation)
-        projection = np.concatenate([rotation, translation], axis=-1)
-        projections.append(projection)
-        dict_cam[cam]["projection"] = projection
-        dists.append(dict_cam[cam]["dist"])
-        mtxs.append(dict_cam[cam]["mtx"])
-    return mtxs, dists, projections, rotations, translations
+def chain_stereo_poses(root, camera_ids):
+    """Chain the stereo results for consecutive cameras into relative poses.
+
+    Returns ``{camera_id: (R, T)}`` with ``p_cam = R @ p_ref + T``, where the
+    reference is ``camera_ids[0]``. This walks the consecutive pairs this repo
+    writes; RT-COSMIK carries a more general version that treats the pairs as a
+    graph and can take them in any order or direction.
+    """
+    camera_ids = list(camera_ids)
+    poses = {camera_ids[0]: (np.eye(3), np.zeros(3))}
+    for cam_a, cam_b in zip(camera_ids[:-1], camera_ids[1:]):
+        path = stereo_pose_path(root, cam_a, cam_b)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"missing stereo result for camera_{cam_a} -> camera_{cam_b}: {path}")
+        R, T = load_stereo_pose(path)
+        if R is None or T is None:
+            raise ValueError(f"missing 'R'/'T' in {path}")
+        R = np.asarray(R, dtype=float).reshape(3, 3)
+        T = np.asarray(T, dtype=float).reshape(3)
+        R_prev, T_prev = poses[cam_a]
+        poses[cam_b] = (R @ R_prev, R @ T_prev + T)
+    return poses
+
+
+def average_rotations(rotations):
+    """Mean of several rotation matrices, as the nearest rotation to their sum.
+
+    Averaging rotation matrices elementwise leaves a matrix that is no longer
+    orthonormal, so the result is projected back onto SO(3) by SVD. For the small
+    spreads seen between views of the same physical frame this is equivalent to
+    the quaternion mean and needs no sign bookkeeping.
+    """
+    total = np.sum([np.asarray(R, dtype=float).reshape(3, 3) for R in rotations], axis=0)
+    U, _, Vt = np.linalg.svd(total)
+    mean = U @ Vt
+    if np.linalg.det(mean) < 0:  # guard against a reflection
+        U[:, -1] *= -1
+        mean = U @ Vt
+    return mean
+
+
+def fuse_world_anchor(world_poses, relative_poses, reference,
+                      wand_rot_deg=4.0, wand_pos_mm=10.0):
+    """Combine every camera's world measurement into one anchor for the reference.
+
+    Each camera that sees the world frame gives an independent, noisy measurement
+    of it. Because the stereo chain relates the cameras accurately, each of those
+    measurements can be re-expressed as an estimate of the *reference* camera's
+    world pose, so all of them can be used instead of trusting whichever camera
+    happens to be first.
+
+    For camera ``i`` with world pose ``(Rw_i, Tw_i)`` and chain pose ``(R_i, T_i)``
+    taking reference-frame points into camera ``i`` (``p_i = R_i p_ref + T_i``)::
+
+        p_world = Rw_i (R_i p_ref + T_i) + Tw_i
+                = (Rw_i R_i) p_ref + (Rw_i T_i + Tw_i)
+
+    Rotation and translation are then combined differently, because they do not
+    degrade the same way. A camera's rotation estimate is unaffected by how far
+    it sits from the reference, so rotations are averaged evenly and the error
+    falls with the square root of the number of cameras. A camera's *position*
+    estimate, though, is carried across the baseline by that camera's own
+    rotation error: a few degrees over a multi-metre baseline is hundreds of
+    millimetres. Averaging positions evenly therefore makes the anchor markedly
+    worse than simply believing the reference camera. Positions are instead
+    combined by inverse variance, with each camera's variance being its own wand
+    error plus the rotation error amplified by its distance from the reference::
+
+        var_i = wand_pos^2 + (|T_i| * wand_rot)^2
+
+    The reference camera has ``|T_i| = 0`` and so dominates, while a distant
+    camera contributes only as much as its geometry allows.
+
+    Args:
+        world_poses (dict): ``{camera_id: (R, T)}`` measured world poses, in
+            RT-COSMIK's convention (camera in world).
+        relative_poses (dict): ``{camera_id: (R, T)}`` chain poses relative to
+            ``reference``.
+        reference (int): camera the anchor is expressed for.
+        wand_rot_deg (float): expected rotational error of one wand measurement.
+        wand_pos_mm (float): expected positional error of one wand measurement.
+
+    Returns:
+        tuple: ``(R, T, spread)`` -- the fused pose of the reference camera in the
+        world, and a ``{camera_id: (angle_deg, distance_m)}`` mapping of how far
+        each camera's own estimate sits from the fused one. A large spread means
+        the world measurements disagree, which is the signal that one of them is
+        badly pointed.
+    """
+    estimates = {}
+    baselines = {}
+    for camera_id, (Rw, Tw) in world_poses.items():
+        if camera_id not in relative_poses:
+            continue
+        Rw = np.asarray(Rw, dtype=float).reshape(3, 3)
+        Tw = np.asarray(Tw, dtype=float).reshape(3)
+        R_rel, T_rel = relative_poses[camera_id]
+        R_rel = np.asarray(R_rel, dtype=float).reshape(3, 3)
+        T_rel = np.asarray(T_rel, dtype=float).reshape(3)
+        estimates[camera_id] = (Rw @ R_rel, Rw @ T_rel + Tw)
+        baselines[camera_id] = float(np.linalg.norm(T_rel))
+
+    if not estimates:
+        raise ValueError("no camera has both a world pose and a chain pose")
+
+    R_mean = average_rotations([R for R, _ in estimates.values()])
+
+    sigma_pos = wand_pos_mm / 1000.0
+    sigma_rot = np.radians(wand_rot_deg)
+    weights = np.array([1.0 / (sigma_pos ** 2 + (baselines[c] * sigma_rot) ** 2)
+                        for c in estimates])
+    weights /= weights.sum()
+    T_mean = np.sum([w * T for w, (_, T) in zip(weights, estimates.values())], axis=0)
+
+    spread = {}
+    for camera_id, (R, T) in estimates.items():
+        cos = (np.trace(R @ R_mean.T) - 1.0) / 2.0
+        spread[camera_id] = (float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))),
+                             float(np.linalg.norm(T - T_mean)))
+    return R_mean, T_mean, spread
+
+
+def rtcosmik_calib_path():
+    """Where RT-COSMIK reads calibration from, or None if it is not installed."""
+    try:
+        from rtcosmik.config_loader import settings
+    except ImportError:
+        return None
+    return settings.cam_calib_path
+
+
+def install_to_rtcosmik(source, destination=None, verify=True):
+    """Copy a COMFI-layout calibration into the place RT-COSMIK reads it from.
+
+    Nothing is converted: the calibration scripts already write the layout and
+    convention RT-COSMIK expects, so this is a copy plus a read-back. The
+    read-back matters -- a calibration that lands in the right directory but
+    cannot be loaded is not installed, and the failure would otherwise only
+    surface at the start of a capture session.
+
+    Args:
+        source (str): calibration root to copy from.
+        destination (str | None): root to copy into; defaults to RT-COSMIK's
+            ``settings.cam_calib_path``.
+        verify (bool): load the result back through RT-COSMIK.
+
+    Returns:
+        str: the destination written to.
+    """
+    destination = destination or rtcosmik_calib_path()
+    if destination is None:
+        raise RuntimeError(
+            "RT-COSMIK is not importable, so its calibration path is unknown. "
+            "Pass an explicit destination, or install RT-COSMIK with "
+            "rt-cosmik/scripts/bash/setup_env.sh.")
+    if os.path.abspath(source) == os.path.abspath(destination):
+        return destination
+
+    copied = 0
+    for sub in ("intrinsics", "extrinsics"):
+        src = os.path.join(source, sub)
+        if not os.path.isdir(src):
+            continue
+        dst = os.path.join(destination, sub)
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+        copied += sum(len(files) for _, _, files in os.walk(dst))
+
+    # The manifest travels with the calibration: without it RT-COSMIK has no way
+    # to tell that the rig was recabled since these files were produced.
+    manifest = camera_manifest_path(source)
+    if os.path.isfile(manifest):
+        shutil.copyfile(manifest, camera_manifest_path(destination))
+        copied += 1
+    print(f"  installed {copied} files into {destination}")
+
+    if not verify:
+        return destination
+    try:
+        from rtcosmik.camera.cam_utils import (load_camera_parameters,
+                                               describe_camera_placement)
+    except ImportError:
+        print("  RT-COSMIK not importable, skipping verification")
+        return destination
+
+    intrinsics_dir = os.path.join(destination, "intrinsics")
+    cameras = sorted(
+        int(name[len("camera_"):-len("_intrinsics.yaml")])
+        for name in os.listdir(intrinsics_dir)
+        if name.startswith("camera_") and name.endswith("_intrinsics.yaml"))
+    mtxs, _, _, _, _ = load_camera_parameters(destination, camera_ids=cameras)
+    print(f"  verified: RT-COSMIK loads {len(mtxs)} camera(s) {cameras}")
+    for camera_id, position in describe_camera_placement(
+            destination, camera_ids=cameras).items():
+        print(f"    camera_{camera_id} anchored at {position.round(3)} m")
+    return destination
