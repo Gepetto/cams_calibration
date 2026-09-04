@@ -1,6 +1,6 @@
 # cams_calibration
 
-Calibrates a multi-camera rig for [RT-COSMIK](https://gitlab.laas.fr/msabbah/rt-cosmik).
+Calibrates a multi-camera rig for [RT-COSMIK](https://github.com/Gepetto/rt-cosmik).
 Output is written directly in the layout RT-COSMIK reads, so no conversion step.
 
 Two steps: intrinsics and stereo pairs from a checkerboard, then one world anchor
