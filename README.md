@@ -80,6 +80,34 @@ World poses store the **camera's pose in the world frame** (`p_world = R @ p_cam
 so `T` is the camera's position in the room. Stereo pairs keep OpenCV's own
 convention and are not inverted. See RT-COSMIK's README for the full convention.
 
+## When the checkerboard cannot reach a pair
+
+A side option, and a much less accurate one. If two cameras are too far apart or
+too opposed to ever share a board view, their pose can be recovered from a person
+walking in the scene instead:
+
+```bash
+python3 scripts/calibrate_from_human.py --cameras 0 2 4 6 \
+    --videos recordings/walk --height 1.78
+```
+
+It writes the same `cam_to_cam` files, so steps 2 and 3 are unchanged. Intrinsics
+must exist first.
+
+The subject has to **walk a circuit covering the floor area**. Standing in one
+place or walking a straight line leaves the geometry underdetermined; the script
+measures this and refuses such a recording.
+
+Expect the cameras to be placed **about 3% of their baseline out** — 25 mm on a
+0.8 m pair, 150 mm on a 5 m one, against roughly 5 mm for the checkerboard. That
+is the state of the art for this technique, not a shortfall of the
+implementation. Prefer `calibrate_cameras.py` wherever a board can reach.
+
+In RT-COSMIK that error becomes a ~0.5° rigid rotation of the reconstruction
+rather than a distortion, so joint angles are unaffected and absolute placement
+shifts by ~60 mm. A pipeline that triangulates 2D instead would see real shape
+distortion and should not use this.
+
 ## Recalibrating without the rig
 
 Both scripts take `--from-images` to reuse the images already on disk,
