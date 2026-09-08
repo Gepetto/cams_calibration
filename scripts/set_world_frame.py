@@ -29,6 +29,7 @@ reported.
     python3 scripts/set_world_frame.py --cameras 0 2 --robot --from-images --no-show
 """
 import argparse
+import glob
 import os
 import sys
 
@@ -52,6 +53,9 @@ settings = Settings()
 # camera, so the reference camera's own measurement is kept instead.
 MIN_CAMERAS_TO_FUSE = 3
 
+# Length of the world axes drawn on the verification image, in metres.
+CHECK_AXIS_LENGTH = 0.1
+
 # Above this the cameras disagree enough that one of them is likely mispointed.
 DISAGREEMENT_WARN_DEG = 5.0
 
@@ -70,7 +74,45 @@ def images_dir(camera_id):
     return os.path.join(IMAGES_ROOT, f"images_world_cam_{camera_id}", "color")
 
 
-def capture(camera_ids, required_images, detector, show=True):
+def draw_wand_overlay(shown, corners, camera_matrix, dist_coeffs):
+    """Draw the wand's own axes and its reprojected tip onto a preview frame.
+
+    This mirrors wand_positions_in_camera exactly -- same corner model, same
+    solver, same tip offset, and likewise only the first detected marker -- so
+    the cross drawn here sits where SPACE would actually record the position.
+    """
+    half = settings.wand_marker_size / 2
+    marker_points = np.array([[-half, half, 0], [half, half, 0],
+                              [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+    ok, rvec, tvec = cv2.solvePnP(marker_points, corners[0].reshape(-1, 2),
+                                  camera_matrix, dist_coeffs, False,
+                                  cv2.SOLVEPNP_IPPE_SQUARE)
+    if not ok:
+        return None
+
+    cv2.drawFrameAxes(shown, camera_matrix, dist_coeffs, rvec, tvec, half)
+
+    rotation, _ = cv2.Rodrigues(rvec)
+    tip = tvec + rotation @ settings.wand_end_effector_local_pos
+    # The tip is already in camera coordinates, so project it with an identity pose.
+    image_points, _ = cv2.projectPoints(tip.reshape(1, 3), np.zeros((3, 1)),
+                                        np.zeros((3, 1)), camera_matrix, dist_coeffs)
+    point = image_points.reshape(2)
+    if not np.all(np.isfinite(point)):
+        return None
+
+    # Draw the shaft from the marker to the tip, so a wrong tip offset is obvious.
+    tip_xy = tuple(np.round(point).astype(int))
+    marker_xy = tuple(np.round(corners[0].reshape(-1, 2).mean(axis=0)).astype(int))
+    cv2.line(shown, marker_xy, tip_xy, (0, 255, 255), 2)
+    cv2.drawMarker(shown, tip_xy, (0, 0, 255), cv2.MARKER_CROSS, 40, 3)
+    cv2.putText(shown, f"tip {tip.flatten()[2]:.2f} m",
+                (tip_xy[0] + 24, tip_xy[1]), cv2.FONT_HERSHEY_SIMPLEX,
+                1.2, (0, 0, 255), 3)
+    return tip.flatten()
+
+
+def capture(camera_ids, required_images, detector, intrinsics, show=True):
     """Store one image set per keypress, until the wand has been pointed everywhere."""
     available = list(list_cameras_with_v4l2().keys())
     missing = [c for c in camera_ids if c not in available]
@@ -104,6 +146,11 @@ def capture(camera_ids, required_images, detector, show=True):
                         cv2.cvtColor(shown, cv2.COLOR_BGR2GRAY))
                     if ids is not None:
                         cv2.aruco.drawDetectedMarkers(shown, corners, ids)
+                        K, D = intrinsics[camera_id]
+                        draw_wand_overlay(shown, corners, K, D)
+                    else:
+                        cv2.putText(shown, "no wand", (24, 130),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 255), 3)
                     tile = cv2.resize(shown, (640, 480), interpolation=cv2.INTER_NEAREST)
                     cv2.putText(tile, f"cam {camera_id}  {img_idx}/{required_images}",
                                 (12, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
@@ -125,6 +172,64 @@ def capture(camera_ids, required_images, detector, show=True):
         for cap in captures:
             cap.release()
         cv2.destroyAllWindows()
+
+
+def save_world_frame_check(camera_ids, reference, world_R_cam, world_T_cam,
+                           relative, intrinsics, out, show=True):
+    """Reproject the anchored world frame onto one image per camera.
+
+    The printed position says where the camera thinks it is, but not whether the
+    frame itself landed on the thing the wand was pointed at. This draws the
+    anchor that was just saved -- after fusion, and after the stereo chain for
+    the non-reference cameras -- back into each camera's own view, where a wrong
+    anchor is obvious: the axes sit off the physical frame, or the origin floats.
+
+    Because the non-reference cameras are drawn through the chain rather than
+    from their own measurement, a bad stereo result shows up here too, as axes
+    that are right in the reference view and drift in the others.
+    """
+    # The anchor is the reference camera expressed in the world; projecting
+    # world points into an image needs the opposite direction.
+    ref_R_world, ref_T_world = invert_pose(world_R_cam, world_T_cam)
+
+    tiles = []
+    for camera_id in camera_ids:
+        folder = images_dir(camera_id)
+        names = sorted(glob.glob(os.path.join(folder, "*.png")))
+        if not names:
+            continue
+        image = cv2.imread(names[0], 1)
+        if image is None:
+            continue
+
+        # Carry the anchor into this camera along the chain: p_i = R_i p_ref + T_i.
+        R_i, T_i = relative[camera_id]
+        cam_R_world = R_i @ ref_R_world
+        cam_T_world = R_i @ ref_T_world + T_i
+
+        K, D = intrinsics[camera_id]
+        cv2.drawFrameAxes(image, K, D, cv2.Rodrigues(cam_R_world)[0],
+                          np.asarray(cam_T_world, dtype=float).reshape(3, 1),
+                          CHECK_AXIS_LENGTH, 4)
+        role = "reference" if camera_id == reference else "chained"
+        cv2.putText(image, f"cam {camera_id} ({role})", (24, 64),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 255, 0), 4)
+        cv2.putText(image, os.path.basename(names[0]), (24, 118),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        tiles.append(cv2.resize(image, (640, 480), interpolation=cv2.INTER_AREA))
+
+    if not tiles:
+        return None
+
+    check = np.hstack(tiles)
+    path = os.path.join(out, "world_frame_check.png")
+    cv2.imwrite(path, check)
+    if show:
+        cv2.imshow("world frame check", check)
+        print("  press any key on the check window to finish")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    return path
 
 
 def main():
@@ -169,7 +274,8 @@ def main():
         intrinsics[camera_id] = load_intrinsics(path)
 
     if not args.from_images:
-        capture(args.cameras, required_images, detector, show=not args.no_show)
+        capture(args.cameras, required_images, detector, intrinsics,
+                show=not args.no_show)
 
     reference = args.cameras[0]
 
@@ -234,6 +340,15 @@ def main():
     if others:
         print(f"\nCameras {', '.join(str(c) for c in others)} are placed relative to "
               f"camera_{reference} by chaining the stereo results.")
+
+    check = save_world_frame_check(args.cameras, reference, world_R_cam, world_T_cam,
+                                   relative, intrinsics, args.out,
+                                   show=not args.no_show)
+    if check:
+        print(f"\nWorld frame drawn on one image per camera -> "
+              f"{os.path.relpath(check, args.out)}")
+        print("  the axes must sit on the frame the wand was pointed at; x red, "
+              "y green, z blue")
 
     print(f"\nWritten under {args.out}")
     if args.install is not None:
