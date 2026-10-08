@@ -8,6 +8,11 @@ from a pointed wand.
 
 ## Setup
 
+It runs in RT-COSMIK's Docker image: clone this repository next to `rt-cosmik`,
+and `rt-cosmik/docker/run.sh` mounts it at `/root/workspace/cams_calibration`
+(see RT-COSMIK's
+[installation guide](https://github.com/Gepetto/rt-cosmik/blob/main/docs/installation.md)).
+
 Check `utils/settings.py` matches your hardware:
 
 | setting | meaning |
@@ -78,7 +83,9 @@ config/cam_params/
 
 World poses store the **camera's pose in the world frame** (`p_world = R @ p_cam + T`),
 so `T` is the camera's position in the room. Stereo pairs keep OpenCV's own
-convention and are not inverted. See RT-COSMIK's README for the full convention.
+convention and are not inverted. See RT-COSMIK's
+[camera pose convention](https://github.com/Gepetto/rt-cosmik/blob/main/docs/data-format.md#camera-pose-convention)
+for the details.
 
 ## When the checkerboard cannot reach a pair
 
